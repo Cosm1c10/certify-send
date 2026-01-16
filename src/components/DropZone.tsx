@@ -97,9 +97,9 @@ const DropZone = ({ onFileProcess, isProcessing }: DropZoneProps) => {
         </>
       ) : (
         <>
-          <div className="relative mb-2">
-            <Upload className="w-16 h-16 text-muted-foreground" />
-            <FileText className="w-8 h-8 text-primary absolute -bottom-1 -right-1" />
+          <div className="flex items-center justify-center gap-3 mb-2">
+            <Upload className="w-14 h-14 text-muted-foreground" />
+            <FileText className="w-10 h-10 text-primary" />
           </div>
           <div className="text-center">
             <p className="text-lg font-medium text-foreground">
