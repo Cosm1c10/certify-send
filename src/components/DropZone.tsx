@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { Upload, FileText, Loader2 } from 'lucide-react';
+import { Upload, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface DropZoneProps {
@@ -97,10 +97,7 @@ const DropZone = ({ onFileProcess, isProcessing }: DropZoneProps) => {
         </>
       ) : (
         <>
-          <div className="flex items-center justify-center gap-3 mb-2">
-            <Upload className="w-14 h-14 text-muted-foreground" />
-            <FileText className="w-10 h-10 text-primary" />
-          </div>
+          <Upload className="w-14 h-14 text-muted-foreground mb-2" />
           <div className="text-center">
             <p className="text-lg font-medium text-foreground">
               Drop your PDF certificate here
