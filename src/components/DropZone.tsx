@@ -97,7 +97,7 @@ const DropZone = ({ onFileProcess, isProcessing }: DropZoneProps) => {
         </>
       ) : (
         <>
-          <div className="relative">
+          <div className="relative mb-2">
             <Upload className="w-16 h-16 text-muted-foreground" />
             <FileText className="w-8 h-8 text-primary absolute -bottom-1 -right-1" />
           </div>
