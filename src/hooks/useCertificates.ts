@@ -1,73 +1,98 @@
 import { useState, useCallback } from 'react';
 import { CertificateData } from '@/types/certificate';
+import { supabase } from '@/integrations/supabase/client';
+import { processWithOpenAI } from '@/utils/processWithOpenAI';
 
-// Mock function to simulate API response - replace with actual Edge Function call
-const mockAnalyzeCertificate = async (fileName: string): Promise<Omit<CertificateData, 'id' | 'fileName'>> => {
-  // Simulate API delay
-  await new Promise(resolve => setTimeout(resolve, 1500));
-  
-  // Mock data - in production, this would come from your Edge Function
-  const mockResponses = [
-    {
-      supplierName: 'Global Organics Ltd',
-      product: 'Organic Wheat Flour',
-      country: 'Germany',
-      certType: 'ISO 22000',
-      issueDate: '2024-01-15',
-      expiryDate: '2025-01-14',
-      status: 'valid' as const,
-    },
-    {
-      supplierName: 'Pacific Foods Inc',
-      product: 'Premium Rice',
-      country: 'Japan',
-      certType: 'FSSC 22000',
-      issueDate: '2023-06-01',
-      expiryDate: '2024-05-31',
-      status: 'expired' as const,
-    },
-    {
-      supplierName: 'Nordic Harvest AB',
-      product: 'Oat Bran',
-      country: 'Sweden',
-      certType: 'BRC',
-      issueDate: '2024-03-10',
-      expiryDate: '2025-03-09',
-      status: 'valid' as const,
-    },
-  ];
-  
-  return mockResponses[Math.floor(Math.random() * mockResponses.length)];
-};
+interface EdgeFunctionResponse {
+  supplier_name: string;
+  country: string;
+  product_category: string;
+  ec_regulation: string;
+  certification: string;
+  date_issued: string;
+  date_expired: string;
+}
+
+// Check if we should use local OpenAI (for development) or Supabase Edge Function (for production)
+const USE_LOCAL_OPENAI = !!import.meta.env.VITE_OPENAI_API_KEY && import.meta.env.DEV;
+
+console.log('OpenAI Mode:', USE_LOCAL_OPENAI ? 'LOCAL (direct API)' : 'PRODUCTION (Edge Function)');
+console.log('VITE_OPENAI_API_KEY present:', !!import.meta.env.VITE_OPENAI_API_KEY);
+console.log('DEV mode:', import.meta.env.DEV);
+
+function determineStatus(expiryDate: string): CertificateData['status'] {
+  if (!expiryDate || expiryDate === 'Not Found') {
+    return 'unknown';
+  }
+
+  const expiry = new Date(expiryDate);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  if (isNaN(expiry.getTime())) {
+    return 'unknown';
+  }
+
+  return expiry >= today ? 'valid' : 'expired';
+}
 
 export const useCertificates = () => {
   const [certificates, setCertificates] = useState<CertificateData[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
 
   const analyzeCertificate = useCallback(async (file: File, base64Image: string) => {
+    console.log('analyzeCertificate called with file:', file.name);
+    console.log('base64Image length:', base64Image.length);
     setIsProcessing(true);
-    
+
     try {
-      // TODO: Replace with actual Edge Function call
-      // const response = await fetch('/api/analyze-cert', {
-      //   method: 'POST',
-      //   headers: { 'Content-Type': 'application/json' },
-      //   body: JSON.stringify({ image: base64Image }),
-      // });
-      // const data = await response.json();
-      
-      const data = await mockAnalyzeCertificate(file.name);
-      
+      let data: EdgeFunctionResponse;
+
+      if (USE_LOCAL_OPENAI) {
+        // Development: Call OpenAI directly from the browser
+        console.log('Calling OpenAI API directly...');
+        data = await processWithOpenAI(base64Image);
+        console.log('OpenAI response:', data);
+      } else {
+        // Production: Use Supabase Edge Function
+        const base64Data = base64Image.replace(/^data:image\/\w+;base64,/, '');
+        const { data: responseData, error } = await supabase.functions.invoke<EdgeFunctionResponse>(
+          'process-certificate',
+          {
+            body: { image: base64Data },
+          }
+        );
+
+        if (error) {
+          throw new Error(error.message || 'Failed to process certificate');
+        }
+
+        if (!responseData) {
+          throw new Error('No data returned from Edge Function');
+        }
+
+        data = responseData;
+      }
+
       const newCertificate: CertificateData = {
         id: crypto.randomUUID(),
         fileName: file.name,
-        ...data,
+        supplierName: data.supplier_name || '',
+        product: data.product_category || '',
+        country: data.country || '',
+        ecRegulation: data.ec_regulation || '',
+        certification: data.certification || '',
+        certType: data.certification || '', // Kept for backwards compatibility
+        issueDate: data.date_issued || '',
+        expiryDate: data.date_expired || '',
+        status: determineStatus(data.date_expired),
       };
-      
-      setCertificates(prev => [...prev, newCertificate]);
+
+      setCertificates((prev) => [...prev, newCertificate]);
     } catch (error) {
       console.error('Error analyzing certificate:', error);
-      alert('Failed to analyze certificate. Please try again.');
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      alert(`Failed to analyze certificate: ${message}`);
     } finally {
       setIsProcessing(false);
     }

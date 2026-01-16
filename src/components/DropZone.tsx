@@ -9,6 +9,7 @@ interface DropZoneProps {
 
 const DropZone = ({ onFileProcess, isProcessing }: DropZoneProps) => {
   const [isDragging, setIsDragging] = useState(false);
+  const [isConverting, setIsConverting] = useState(false);
 
   const processFile = useCallback(async (file: File) => {
     if (file.type !== 'application/pdf') {
@@ -16,29 +17,47 @@ const DropZone = ({ onFileProcess, isProcessing }: DropZoneProps) => {
       return;
     }
 
-    const pdfjsLib = await import('pdfjs-dist');
-    pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+    setIsConverting(true);
+    console.log('Starting PDF conversion for:', file.name);
 
-    const arrayBuffer = await file.arrayBuffer();
-    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-    const page = await pdf.getPage(1);
-    
-    const scale = 2;
-    const viewport = page.getViewport({ scale });
-    
-    const canvas = document.createElement('canvas');
-    const context = canvas.getContext('2d')!;
-    canvas.height = viewport.height;
-    canvas.width = viewport.width;
+    try {
+      const pdfjsLib = await import('pdfjs-dist');
+      // For pdfjs-dist v5.x, use the bundled worker
+      pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+        'pdfjs-dist/build/pdf.worker.min.mjs',
+        import.meta.url
+      ).toString();
 
-    await page.render({
-      canvasContext: context,
-      viewport: viewport,
-      canvas: canvas,
-    }).promise;
+      const arrayBuffer = await file.arrayBuffer();
+      console.log('PDF loaded, size:', arrayBuffer.byteLength);
 
-    const base64Image = canvas.toDataURL('image/png');
-    onFileProcess(file, base64Image);
+      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+      console.log('PDF parsed, pages:', pdf.numPages);
+
+      const page = await pdf.getPage(1);
+
+      const scale = 2;
+      const viewport = page.getViewport({ scale });
+
+      const canvas = document.createElement('canvas');
+      const context = canvas.getContext('2d')!;
+      canvas.height = viewport.height;
+      canvas.width = viewport.width;
+
+      await page.render({
+        canvasContext: context,
+        viewport: viewport,
+      }).promise;
+
+      const base64Image = canvas.toDataURL('image/png');
+      console.log('PDF converted to image, length:', base64Image.length);
+
+      onFileProcess(file, base64Image);
+    } catch (error) {
+      console.error('Error converting PDF:', error);
+      alert(`Failed to process PDF: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      setIsConverting(false);
+    }
   }, [onFileProcess]);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
@@ -79,7 +98,7 @@ const DropZone = ({ onFileProcess, isProcessing }: DropZoneProps) => {
         isDragging 
           ? "border-primary bg-primary/5 scale-[1.02]" 
           : "border-border hover:border-primary/50 hover:bg-muted/50",
-        isProcessing && "pointer-events-none opacity-70"
+        (isProcessing || isConverting) && "pointer-events-none opacity-70"
       )}
     >
       <input
@@ -87,13 +106,15 @@ const DropZone = ({ onFileProcess, isProcessing }: DropZoneProps) => {
         accept=".pdf"
         onChange={handleFileSelect}
         className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-        disabled={isProcessing}
+        disabled={isProcessing || isConverting}
       />
-      
-      {isProcessing ? (
+
+      {(isProcessing || isConverting) ? (
         <>
           <Loader2 className="w-16 h-16 text-primary animate-spin" />
-          <p className="text-lg font-medium text-foreground">Processing certificate...</p>
+          <p className="text-lg font-medium text-foreground">
+            {isConverting && !isProcessing ? 'Converting PDF...' : 'Analyzing certificate...'}
+          </p>
         </>
       ) : (
         <>

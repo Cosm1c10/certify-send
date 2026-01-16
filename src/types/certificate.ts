@@ -3,7 +3,9 @@ export interface CertificateData {
   supplierName: string;
   product: string;
   country: string;
-  certType: string;
+  ecRegulation: string;
+  certification: string;
+  certType: string; // Kept for backwards compatibility
   issueDate: string;
   expiryDate: string;
   status: 'valid' | 'expired' | 'pending' | 'unknown';

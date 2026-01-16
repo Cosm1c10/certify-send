@@ -39,9 +39,9 @@ const ReviewTable = ({ certificates }: ReviewTableProps) => {
         <TableHeader>
           <TableRow className="bg-muted/50">
             <TableHead className="font-semibold">Supplier Name</TableHead>
-            <TableHead className="font-semibold">Product</TableHead>
             <TableHead className="font-semibold">Country</TableHead>
-            <TableHead className="font-semibold">Cert Type</TableHead>
+            <TableHead className="font-semibold">Product</TableHead>
+            <TableHead className="font-semibold">Certification</TableHead>
             <TableHead className="font-semibold">Dates</TableHead>
             <TableHead className="font-semibold">Status</TableHead>
           </TableRow>
@@ -49,16 +49,16 @@ const ReviewTable = ({ certificates }: ReviewTableProps) => {
         <TableBody>
           {certificates.map((cert) => (
             <TableRow key={cert.id} className="hover:bg-muted/30">
-              <TableCell className="font-medium">{cert.supplierName}</TableCell>
-              <TableCell>{cert.product}</TableCell>
-              <TableCell>{cert.country}</TableCell>
-              <TableCell>{cert.certType}</TableCell>
+              <TableCell className="font-medium">{cert.supplierName || '-'}</TableCell>
+              <TableCell>{cert.country || '-'}</TableCell>
+              <TableCell>{cert.product || '-'}</TableCell>
+              <TableCell>{cert.certification || '-'}</TableCell>
               <TableCell className="text-sm">
-                <div>{cert.issueDate} - {cert.expiryDate}</div>
+                <div>{cert.issueDate || '-'} - {cert.expiryDate || '-'}</div>
               </TableCell>
               <TableCell>
-                <Badge 
-                  variant="outline" 
+                <Badge
+                  variant="outline"
                   className={statusStyles[cert.status]}
                 >
                   {cert.status.charAt(0).toUpperCase() + cert.status.slice(1)}
