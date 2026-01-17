@@ -10,47 +10,63 @@ interface CertificateExtractionResult {
   date_expired: string;
 }
 
-export async function processWithOpenAI(base64Image: string): Promise<CertificateExtractionResult> {
+export async function processWithOpenAI(base64Image: string, filename?: string): Promise<CertificateExtractionResult> {
   if (!OPENAI_API_KEY) {
     throw new Error('OpenAI API key not configured. Add VITE_OPENAI_API_KEY to .env.local');
   }
 
+  console.log('Processing certificate with filename:', filename || 'not provided');
+
   const systemPrompt = `
-You are a Compliance Officer for a Packaging Company.
-YOUR GOAL: Extract data to match the "Certificate Management Master Sheet".
+You are a Compliance Classification Engine.
+YOUR GOAL: Classify the certificate into the Client's specific "Measure" buckets.
 
-### 1. EXTRACTION RULES (STRICT)
+### 1. LOGIC MAPPING RULES (CRITICAL)
 
-**FIELD: supplier_name**
-- Extract the Legal Manufacturer/Holder.
-- If the certificate lists a "Trading Company" (like AHCOF) AND a "Site" (like Zhongyin), extract the SITE Name as the Supplier.
+**FIELD: supplier_name (PRIORITY RULES)**
+- PRIORITY 1 (Filename Rule): Look at the provided 'Filename' in the user message.
+  - If the filename follows the pattern 'Name - ...' (e.g., 'Ahcof - Compostable cert.pdf'), EXTRACT 'Ahcof' as the supplier.
+  - If the filename starts with a Company Name before a dash or separator, use that name.
+- PRIORITY 2 (Document Rule): Only if the filename is generic (like 'scan.pdf', 'document.pdf', or just numbers), extract the 'Holder' or 'Manufacturer' from the certificate image.
 
-**FIELD: ec_regulation (The "Measure")**
-- You must classify the document into one of the Client's Standard Measures.
-- IF text contains "1935/2004" -> Output: "Regulation (EC) No 1935/2004"
-- IF text contains "2023/2006" or "GMP" -> Output: "Commission Regulation (EC) No 2023/2006"
-- IF text contains "10/2011" (Plastics) -> Output: "Commission Regulation (EU) No 10/2011"
-- IF text contains "13432" (Compostable) -> Output: "EN 13432 (Compostable OK)"
-- IF text contains "14287" (Foil) -> Output: "EN 14287 (Foil)"
-- IF text contains "FSC" -> Output: "FSC (Forest Stewardship Council)"
-- ELSE -> Output strictly what is written (e.g., "ISO 9001").
+**FIELD: ec_regulation (The "Measure" Bucket)**
+Look at the document text and type. You MUST output one of the exact strings below. Do not output the text on the page.
 
-**FIELD: certification (The "Standard")**
-- Extract the Certification Body or Type.
-- Valid Examples: "BRCGS", "DIN CERTCO", "TUV Austria", "ISO 9001", "ISO 45001", "FSSC 22000".
+* IF Cert is **BRC**, **BRCGS**, **ISO 22000**, or **GMP**
+    -> OUTPUT: "Commission Regulation (EC) No 2023/2006"
 
-**FIELD: product_category**
-- Brief description (e.g., "Paper Cup", "PE Coated Board").
+* IF Cert is **Compostable**, **EN 13432**, **TUV Austria**, or **DIN CERTCO**
+    -> OUTPUT: "Compostable Certification"
+
+* IF Cert is **Recyclable**, **Cyclos**, **CHI**, or **EN 13430**
+    -> OUTPUT: "Recyclable Certification"
+
+* IF Cert is **ISO 9001**, **ISO 14001**, **FSC**
+    -> OUTPUT: "General Measure"
+
+* IF Cert mentions **1935/2004** explicitly (and is not BRC/Compostable)
+    -> OUTPUT: "Regulation (EC) No 1935/2004"
+
+* IF Cert mentions **10/2011** (Plastics)
+    -> OUTPUT: "Commission Regulation (EU) No 10/2011"
+
+* ELSE (Fallback)
+    -> OUTPUT: "Unknown Measure"
+
+**FIELD: certification**
+* Extract the specific standard name (e.g., "BRCGS", "DIN CERTCO", "Cyclos-HTP").
 
 **FIELD: country**
-- CRITICAL: Look at the *Address* of the manufacturing site. Extract ONLY the Country (e.g., "China").
+* Extract ONLY the Country name from the site address.
+
+**FIELD: product_category**
+* Brief description of the product.
 
 **FIELD: date_issued**
-- Format: YYYY-MM-DD.
+* Format: YYYY-MM-DD.
 
 **FIELD: date_expired**
-- Format: YYYY-MM-DD.
-- Logic: If "Valid until 31 Jan 2027" -> "2027-01-31".
+* Format: YYYY-MM-DD.
 
 ### 2. RETURN JSON
 {
@@ -93,7 +109,7 @@ YOUR GOAL: Extract data to match the "Certificate Management Master Sheet".
             },
             {
               type: 'text',
-              text: 'Extract all certificate information from this image.',
+              text: `Analyze this certificate. Filename: "${filename || 'unknown.pdf'}". Extract all certificate information.`,
             },
           ],
         },

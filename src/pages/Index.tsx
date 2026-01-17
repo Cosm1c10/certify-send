@@ -1,4 +1,4 @@
-import { Download, ShieldCheck } from 'lucide-react';
+import { Download, ShieldCheck, RotateCcw, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import DropZone from '@/components/DropZone';
 import ReviewTable from '@/components/ReviewTable';
@@ -6,14 +6,26 @@ import { useCertificates } from '@/hooks/useCertificates';
 import { exportToExcel } from '@/utils/exportExcel';
 
 const Index = () => {
-  const { certificates, isProcessing, analyzeCertificate } = useCertificates();
+  const {
+    certificates,
+    isProcessing,
+    processingProgress,
+    processingErrors,
+    analyzeCertificates,
+    clearCertificates
+  } = useCertificates();
 
-  const handleExport = () => {
+  const handleExport = async () => {
     if (certificates.length === 0) {
       alert('No certificates to export');
       return;
     }
-    exportToExcel(certificates);
+    try {
+      await exportToExcel(certificates);
+    } catch (error) {
+      console.error('Export failed:', error);
+      alert('Failed to export Excel file');
+    }
   };
 
   return (
@@ -35,11 +47,29 @@ const Index = () => {
 
         {/* Drop Zone */}
         <div className="mb-12">
-          <DropZone 
-            onFileProcess={analyzeCertificate} 
-            isProcessing={isProcessing} 
+          <DropZone
+            onFilesProcess={analyzeCertificates}
+            isProcessing={isProcessing}
+            processingProgress={processingProgress}
           />
         </div>
+
+        {/* Processing Errors */}
+        {processingErrors.length > 0 && (
+          <div className="mb-8 p-4 bg-destructive/10 border border-destructive/20 rounded-xl">
+            <div className="flex items-center gap-2 mb-2">
+              <AlertCircle className="w-5 h-5 text-destructive" />
+              <h3 className="font-semibold text-destructive">
+                {processingErrors.length} file(s) failed to process
+              </h3>
+            </div>
+            <ul className="text-sm text-destructive/80 list-disc list-inside">
+              {processingErrors.map((error, index) => (
+                <li key={index}>{error}</li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         {/* Review Table */}
         <div className="mb-8">
@@ -50,10 +80,22 @@ const Index = () => {
         </div>
 
         {/* Footer */}
-        <div className="flex justify-center pt-8 border-t border-border">
+        <div className="flex justify-center gap-4 pt-8 border-t border-border">
+          {certificates.length > 0 && (
+            <Button
+              onClick={clearCertificates}
+              variant="outline"
+              size="lg"
+              className="gap-2"
+              disabled={isProcessing}
+            >
+              <RotateCcw className="w-5 h-5" />
+              Start Again
+            </Button>
+          )}
           <Button
             onClick={handleExport}
-            disabled={certificates.length === 0}
+            disabled={certificates.length === 0 || isProcessing}
             size="lg"
             className="gap-2"
           >
