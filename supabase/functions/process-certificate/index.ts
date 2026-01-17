@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import OpenAI from "https://deno.land/x/openai@v4.20.1/mod.ts";
 
@@ -6,16 +7,6 @@ const corsHeaders = {
   "Access-Control-Allow-Headers":
     "authorization, x-client-info, apikey, content-type",
 };
-
-interface CertificateExtractionResult {
-  supplier_name: string;
-  country: string;
-  product_category: string;
-  ec_regulation: string;
-  certification: string;
-  date_issued: string;
-  date_expired: string;
-}
 
 serve(async (req) => {
   // Handle CORS preflight requests
@@ -36,7 +27,7 @@ serve(async (req) => {
       );
     }
 
-    console.log('Processing certificate with filename:', filename || 'not provided');
+    console.log("Processing certificate with filename:", filename || "not provided");
 
     const openaiApiKey = Deno.env.get("OPENAI_API_KEY");
     if (!openaiApiKey) {
@@ -137,7 +128,7 @@ Look at the document text and type. You MUST output one of the exact strings bel
             },
             {
               type: "text",
-              text: `Analyze this certificate. Filename: "${filename || 'unknown.pdf'}". Extract all certificate information.`,
+              text: `Analyze this certificate. Filename: "${filename || "unknown.pdf"}". Extract all certificate information.`,
             },
           ],
         },
@@ -164,7 +155,7 @@ Look at the document text and type. You MUST output one of the exact strings bel
       .replace(/```\n?/g, "")
       .trim();
 
-    const extractedData: CertificateExtractionResult = JSON.parse(cleanedContent);
+    const extractedData = JSON.parse(cleanedContent);
 
     return new Response(JSON.stringify(extractedData), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
