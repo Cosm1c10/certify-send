@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { Upload, Loader2 } from 'lucide-react';
+import { Upload, Loader2, FileUp } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export interface FileWithBase64 {
@@ -59,7 +59,6 @@ const DropZone = ({ onFilesProcess, isProcessing, processingProgress }: DropZone
 
     setIsConverting(true);
     setConversionProgress({ current: 0, total: pdfFiles.length });
-    console.log(`Starting PDF conversion for ${pdfFiles.length} files`);
 
     const convertedFiles: FileWithBase64[] = [];
 
@@ -68,7 +67,6 @@ const DropZone = ({ onFilesProcess, isProcessing, processingProgress }: DropZone
       setConversionProgress({ current: i + 1, total: pdfFiles.length });
 
       try {
-        console.log(`Converting ${i + 1}/${pdfFiles.length}: ${file.name}`);
         const base64Image = await convertPdfToBase64(file);
         convertedFiles.push({ file, base64Image });
       } catch (error) {
@@ -110,7 +108,6 @@ const DropZone = ({ onFilesProcess, isProcessing, processingProgress }: DropZone
     if (files && files.length > 0) {
       processFiles(Array.from(files));
     }
-    // Reset input so the same files can be selected again
     e.target.value = '';
   }, [processFiles]);
 
@@ -124,19 +121,29 @@ const DropZone = ({ onFilesProcess, isProcessing, processingProgress }: DropZone
     return 'Processing...';
   };
 
+  const getProgressPercentage = () => {
+    if (isConverting && conversionProgress.total > 0) {
+      return (conversionProgress.current / conversionProgress.total) * 100;
+    }
+    if (isProcessing && processingProgress && processingProgress.total > 0) {
+      return (processingProgress.current / processingProgress.total) * 100;
+    }
+    return 0;
+  };
+
   return (
     <div
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
       className={cn(
-        "relative border-2 border-dashed rounded-xl p-12 transition-all duration-300 cursor-pointer",
+        "relative border-2 border-dashed rounded-xl transition-all duration-300 cursor-pointer",
         "flex flex-col items-center justify-center gap-4",
-        "min-h-[280px]",
-        isDragging 
-          ? "border-primary bg-primary/5 scale-[1.02]" 
-          : "border-border hover:border-primary/50 hover:bg-muted/50",
-        (isProcessing || isConverting) && "pointer-events-none opacity-70"
+        "min-h-[180px] py-10",
+        isDragging
+          ? "border-yellow-500 bg-yellow-50/50"
+          : "border-gray-200 hover:border-gray-300 bg-gray-50/50 hover:bg-gray-100/50",
+        (isProcessing || isConverting) && "pointer-events-none"
       )}
     >
       <input
@@ -149,22 +156,51 @@ const DropZone = ({ onFilesProcess, isProcessing, processingProgress }: DropZone
       />
 
       {(isProcessing || isConverting) ? (
-        <>
-          <Loader2 className="w-16 h-16 text-primary animate-spin" />
-          <p className="text-lg font-medium text-foreground">
-            {getProgressText()}
-          </p>
-        </>
+        <div className="flex flex-col items-center gap-4 px-8 w-full max-w-md">
+          <div className="relative">
+            <div className="w-14 h-14 rounded-full bg-yellow-100 flex items-center justify-center">
+              <Loader2 className="w-7 h-7 text-yellow-600 animate-spin" />
+            </div>
+          </div>
+          <div className="text-center">
+            <p className="text-base font-medium text-gray-900 mb-1">
+              {getProgressText()}
+            </p>
+            <p className="text-sm text-gray-500">
+              Please wait while we process your documents
+            </p>
+          </div>
+          {/* Progress Bar */}
+          <div className="w-full h-2 bg-gray-200 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-yellow-500 rounded-full transition-all duration-300 ease-out"
+              style={{ width: `${getProgressPercentage()}%` }}
+            />
+          </div>
+        </div>
       ) : (
         <>
-          <Upload className="w-14 h-14 text-muted-foreground mb-2" />
+          <div className={cn(
+            "w-14 h-14 rounded-xl flex items-center justify-center transition-colors",
+            isDragging ? "bg-yellow-100" : "bg-gray-100"
+          )}>
+            {isDragging ? (
+              <FileUp className="w-7 h-7 text-yellow-600" />
+            ) : (
+              <Upload className="w-7 h-7 text-gray-400" />
+            )}
+          </div>
           <div className="text-center">
-            <p className="text-lg font-medium text-foreground">
-              Drop your PDF certificates here
+            <p className="text-base font-medium text-gray-900">
+              {isDragging ? 'Drop your files here' : 'Drop PDF certificates here'}
             </p>
-            <p className="text-sm text-muted-foreground mt-1">
-              or click to browse files (multiple supported)
+            <p className="text-sm text-gray-500 mt-1">
+              or <span className="text-yellow-600 font-medium">click to browse</span> your files
             </p>
+          </div>
+          <div className="flex items-center gap-2 text-xs text-gray-400">
+            <span className="px-2 py-0.5 bg-gray-100 rounded">PDF</span>
+            <span>Multiple files supported</span>
           </div>
         </>
       )}
