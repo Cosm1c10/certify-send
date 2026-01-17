@@ -1,6 +1,13 @@
-// @ts-nocheck
+// Supabase Edge Function - runs in Deno runtime
+// deno-lint-ignore-file no-explicit-any
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import OpenAI from "https://deno.land/x/openai@v4.20.1/mod.ts";
+
+declare const Deno: {
+  env: {
+    get(key: string): string | undefined;
+  };
+};
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
