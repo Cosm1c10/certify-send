@@ -138,8 +138,8 @@ const DropZone = ({ onFilesProcess, isProcessing, processingProgress }: DropZone
       onDrop={handleDrop}
       className={cn(
         "relative border-2 border-dashed rounded-xl transition-all duration-300 cursor-pointer",
-        "flex flex-col items-center justify-center gap-4",
-        "min-h-[180px] py-10",
+        "flex flex-col items-center justify-center gap-3 sm:gap-4",
+        "min-h-[140px] sm:min-h-[180px] py-6 sm:py-10 px-4",
         isDragging
           ? "border-yellow-500 bg-yellow-50/50"
           : "border-gray-200 hover:border-gray-300 bg-gray-50/50 hover:bg-gray-100/50",
@@ -156,22 +156,22 @@ const DropZone = ({ onFilesProcess, isProcessing, processingProgress }: DropZone
       />
 
       {(isProcessing || isConverting) ? (
-        <div className="flex flex-col items-center gap-4 px-8 w-full max-w-md">
+        <div className="flex flex-col items-center gap-3 sm:gap-4 px-4 sm:px-8 w-full max-w-md">
           <div className="relative">
-            <div className="w-14 h-14 rounded-full bg-yellow-100 flex items-center justify-center">
-              <Loader2 className="w-7 h-7 text-yellow-600 animate-spin" />
+            <div className="w-10 h-10 sm:w-14 sm:h-14 rounded-full bg-yellow-100 flex items-center justify-center">
+              <Loader2 className="w-5 h-5 sm:w-7 sm:h-7 text-yellow-600 animate-spin" />
             </div>
           </div>
           <div className="text-center">
-            <p className="text-base font-medium text-gray-900 mb-1">
+            <p className="text-sm sm:text-base font-medium text-gray-900 mb-1">
               {getProgressText()}
             </p>
-            <p className="text-sm text-gray-500">
+            <p className="text-xs sm:text-sm text-gray-500">
               Please wait while we process your documents
             </p>
           </div>
           {/* Progress Bar */}
-          <div className="w-full h-2 bg-gray-200 rounded-full overflow-hidden">
+          <div className="w-full h-1.5 sm:h-2 bg-gray-200 rounded-full overflow-hidden">
             <div
               className="h-full bg-yellow-500 rounded-full transition-all duration-300 ease-out"
               style={{ width: `${getProgressPercentage()}%` }}
@@ -181,25 +181,25 @@ const DropZone = ({ onFilesProcess, isProcessing, processingProgress }: DropZone
       ) : (
         <>
           <div className={cn(
-            "w-14 h-14 rounded-xl flex items-center justify-center transition-colors",
+            "w-10 h-10 sm:w-14 sm:h-14 rounded-xl flex items-center justify-center transition-colors",
             isDragging ? "bg-yellow-100" : "bg-gray-100"
           )}>
             {isDragging ? (
-              <FileUp className="w-7 h-7 text-yellow-600" />
+              <FileUp className="w-5 h-5 sm:w-7 sm:h-7 text-yellow-600" />
             ) : (
-              <Upload className="w-7 h-7 text-gray-400" />
+              <Upload className="w-5 h-5 sm:w-7 sm:h-7 text-gray-400" />
             )}
           </div>
           <div className="text-center">
-            <p className="text-base font-medium text-gray-900">
+            <p className="text-sm sm:text-base font-medium text-gray-900">
               {isDragging ? 'Drop your files here' : 'Drop PDF certificates here'}
             </p>
-            <p className="text-sm text-gray-500 mt-1">
-              or <span className="text-yellow-600 font-medium">click to browse</span> your files
+            <p className="text-xs sm:text-sm text-gray-500 mt-1">
+              or <span className="text-yellow-600 font-medium">tap to browse</span> your files
             </p>
           </div>
-          <div className="flex items-center gap-2 text-xs text-gray-400">
-            <span className="px-2 py-0.5 bg-gray-100 rounded">PDF</span>
+          <div className="flex items-center gap-2 text-[10px] sm:text-xs text-gray-400">
+            <span className="px-1.5 sm:px-2 py-0.5 bg-gray-100 rounded">PDF</span>
             <span>Multiple files supported</span>
           </div>
         </>

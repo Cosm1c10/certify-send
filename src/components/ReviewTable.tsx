@@ -67,14 +67,14 @@ const statusConfig = {
 const ReviewTable = ({ certificates }: ReviewTableProps) => {
   if (certificates.length === 0) {
     return (
-      <div className="border border-gray-200 rounded-xl p-16 text-center bg-gray-50/50">
-        <div className="w-16 h-16 rounded-full bg-gray-100 flex items-center justify-center mx-auto mb-4">
-          <FileText className="w-8 h-8 text-gray-400" />
+      <div className="border border-gray-200 rounded-xl p-8 sm:p-16 text-center bg-gray-50/50">
+        <div className="w-12 h-12 sm:w-16 sm:h-16 rounded-full bg-gray-100 flex items-center justify-center mx-auto mb-3 sm:mb-4">
+          <FileText className="w-6 h-6 sm:w-8 sm:h-8 text-gray-400" />
         </div>
-        <h4 className="text-base font-medium text-gray-900 mb-2">
+        <h4 className="text-sm sm:text-base font-medium text-gray-900 mb-1 sm:mb-2">
           No certificates analyzed yet
         </h4>
-        <p className="text-sm text-gray-500 max-w-sm mx-auto">
+        <p className="text-xs sm:text-sm text-gray-500 max-w-sm mx-auto">
           Upload PDF certificates using the drop zone above to begin extracting compliance data.
         </p>
       </div>
@@ -82,33 +82,33 @@ const ReviewTable = ({ certificates }: ReviewTableProps) => {
   }
 
   return (
-    <div className="border border-gray-200 rounded-xl overflow-hidden">
+    <div className="border border-gray-200 rounded-xl overflow-hidden min-w-[800px]">
       <Table>
         <TableHeader>
           <TableRow className="bg-gray-50/80 hover:bg-gray-50/80 border-b border-gray-200">
-            <TableHead className="font-semibold text-gray-700 text-xs uppercase tracking-wider py-4">
-              Supplier Name
+            <TableHead className="font-semibold text-gray-700 text-[10px] sm:text-xs uppercase tracking-wider py-3 sm:py-4 px-2 sm:px-4">
+              Supplier
             </TableHead>
-            <TableHead className="font-semibold text-gray-700 text-xs uppercase tracking-wider py-4">
+            <TableHead className="font-semibold text-gray-700 text-[10px] sm:text-xs uppercase tracking-wider py-3 sm:py-4 px-2 sm:px-4">
               Country
             </TableHead>
-            <TableHead className="font-semibold text-gray-700 text-xs uppercase tracking-wider py-4">
+            <TableHead className="font-semibold text-gray-700 text-[10px] sm:text-xs uppercase tracking-wider py-3 sm:py-4 px-2 sm:px-4">
               Product
             </TableHead>
-            <TableHead className="font-semibold text-gray-700 text-xs uppercase tracking-wider py-4">
+            <TableHead className="font-semibold text-gray-700 text-[10px] sm:text-xs uppercase tracking-wider py-3 sm:py-4 px-2 sm:px-4">
               EC Regulation
             </TableHead>
-            <TableHead className="font-semibold text-gray-700 text-xs uppercase tracking-wider py-4">
-              Certification
+            <TableHead className="font-semibold text-gray-700 text-[10px] sm:text-xs uppercase tracking-wider py-3 sm:py-4 px-2 sm:px-4">
+              Cert
             </TableHead>
-            <TableHead className="font-semibold text-gray-700 text-xs uppercase tracking-wider py-4">
-              Expiry Date
+            <TableHead className="font-semibold text-gray-700 text-[10px] sm:text-xs uppercase tracking-wider py-3 sm:py-4 px-2 sm:px-4">
+              Expiry
             </TableHead>
-            <TableHead className="font-semibold text-gray-700 text-xs uppercase tracking-wider py-4">
+            <TableHead className="font-semibold text-gray-700 text-[10px] sm:text-xs uppercase tracking-wider py-3 sm:py-4 px-2 sm:px-4">
               Status
             </TableHead>
-            <TableHead className="font-semibold text-gray-700 text-xs uppercase tracking-wider py-4 text-right">
-              Days to Expiry
+            <TableHead className="font-semibold text-gray-700 text-[10px] sm:text-xs uppercase tracking-wider py-3 sm:py-4 px-2 sm:px-4 text-right">
+              Days
             </TableHead>
           </TableRow>
         </TableHeader>
@@ -127,46 +127,46 @@ const ReviewTable = ({ certificates }: ReviewTableProps) => {
                   ${index % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'}
                 `}
               >
-                <TableCell className="font-medium text-gray-900 py-4">
+                <TableCell className="font-medium text-gray-900 py-3 sm:py-4 px-2 sm:px-4 text-xs sm:text-sm">
                   {cert.supplierName || <span className="text-gray-400">-</span>}
                 </TableCell>
-                <TableCell className="text-gray-600 py-4">
+                <TableCell className="text-gray-600 py-3 sm:py-4 px-2 sm:px-4 text-xs sm:text-sm">
                   {cert.country || <span className="text-gray-400">-</span>}
                 </TableCell>
-                <TableCell className="max-w-[200px] py-4">
+                <TableCell className="max-w-[120px] sm:max-w-[200px] py-3 sm:py-4 px-2 sm:px-4">
                   <span
-                    className="block truncate text-gray-600"
+                    className="block truncate text-gray-600 text-xs sm:text-sm"
                     title={cert.product}
                   >
                     {cert.product || <span className="text-gray-400">-</span>}
                   </span>
                 </TableCell>
-                <TableCell className="max-w-[180px] py-4">
+                <TableCell className="max-w-[120px] sm:max-w-[180px] py-3 sm:py-4 px-2 sm:px-4">
                   <span
-                    className="block truncate text-gray-600"
+                    className="block truncate text-gray-600 text-xs sm:text-sm"
                     title={cert.ecRegulation}
                   >
                     {cert.ecRegulation || <span className="text-gray-400">-</span>}
                   </span>
                 </TableCell>
-                <TableCell className="text-gray-600 py-4">
+                <TableCell className="text-gray-600 py-3 sm:py-4 px-2 sm:px-4 text-xs sm:text-sm">
                   {cert.certification || <span className="text-gray-400">-</span>}
                 </TableCell>
-                <TableCell className="text-gray-600 py-4 font-mono text-sm">
+                <TableCell className="text-gray-600 py-3 sm:py-4 px-2 sm:px-4 font-mono text-[10px] sm:text-sm whitespace-nowrap">
                   {cert.expiryDate || <span className="text-gray-400">-</span>}
                 </TableCell>
-                <TableCell className="py-4">
+                <TableCell className="py-3 sm:py-4 px-2 sm:px-4">
                   <Badge
                     variant="outline"
-                    className={`${config.bg} ${config.text} ${config.border} font-medium gap-1.5 px-2.5 py-1`}
+                    className={`${config.bg} ${config.text} ${config.border} font-medium gap-1 sm:gap-1.5 px-1.5 sm:px-2.5 py-0.5 sm:py-1 text-[10px] sm:text-xs whitespace-nowrap`}
                   >
-                    <StatusIcon className="w-3.5 h-3.5" />
+                    <StatusIcon className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
                     {config.label}
                   </Badge>
                 </TableCell>
-                <TableCell className="py-4 text-right">
+                <TableCell className="py-3 sm:py-4 px-2 sm:px-4 text-right">
                   <span className={`
-                    font-semibold tabular-nums
+                    font-semibold tabular-nums text-xs sm:text-sm
                     ${daysToExpiry !== null && daysToExpiry < 0 ? 'text-red-600' :
                       daysToExpiry !== null && daysToExpiry < 30 ? 'text-amber-600' :
                       daysToExpiry !== null ? 'text-emerald-600' : 'text-gray-400'}
