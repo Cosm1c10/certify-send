@@ -45,8 +45,8 @@ const Index = () => {
 
             {/* Badge */}
             <div className="cd-badge text-xs sm:text-sm px-3 sm:px-4 py-1.5 sm:py-2">
-              <span className="hidden sm:inline">Compliance Intelligence Engine</span>
-              <span className="sm:hidden">Compliance Engine</span>
+              <span className="hidden sm:inline">AI Compliance Intelligence Engine</span>
+              <span className="sm:hidden">AI Compliance Engine</span>
             </div>
           </div>
         </div>
@@ -198,7 +198,7 @@ const Index = () => {
 
             {/* Center info + Agency Branding */}
             <div className="text-center">
-              <p className="text-white text-xs sm:text-sm font-medium">Compliance Intelligence Engine</p>
+              <p className="text-white text-xs sm:text-sm font-medium">AI Compliance Intelligence Engine</p>
               <p className="text-slate-300 text-[10px] sm:text-xs mt-1">Automated Certificate Extraction & Validation</p>
               <p className="text-slate-400 text-[10px] sm:text-xs mt-2 sm:mt-3">© 2026 AgenticFloww. All rights reserved.</p>
             </div>

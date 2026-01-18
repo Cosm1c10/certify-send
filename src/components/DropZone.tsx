@@ -1,6 +1,10 @@
 import { useCallback, useState } from 'react';
 import { Upload, Loader2, FileUp } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import QuotaModal from './QuotaModal';
+
+// Demo quota limit - maximum files per session
+const DEMO_FILE_LIMIT = 5;
 
 export interface FileWithBase64 {
   file: File;
@@ -17,6 +21,7 @@ const DropZone = ({ onFilesProcess, isProcessing, processingProgress }: DropZone
   const [isDragging, setIsDragging] = useState(false);
   const [isConverting, setIsConverting] = useState(false);
   const [conversionProgress, setConversionProgress] = useState({ current: 0, total: 0 });
+  const [showQuotaModal, setShowQuotaModal] = useState(false);
 
   const convertPdfToBase64 = useCallback(async (file: File): Promise<string> => {
     const pdfjsLib = await import('pdfjs-dist');
@@ -50,6 +55,12 @@ const DropZone = ({ onFilesProcess, isProcessing, processingProgress }: DropZone
 
     if (pdfFiles.length === 0) {
       alert('Please upload PDF files');
+      return;
+    }
+
+    // Check demo quota limit
+    if (pdfFiles.length > DEMO_FILE_LIMIT) {
+      setShowQuotaModal(true);
       return;
     }
 
@@ -200,10 +211,16 @@ const DropZone = ({ onFilesProcess, isProcessing, processingProgress }: DropZone
           </div>
           <div className="flex items-center gap-2 text-[10px] sm:text-xs text-gray-400">
             <span className="px-1.5 sm:px-2 py-0.5 bg-gray-100 rounded">PDF</span>
-            <span>Multiple files supported</span>
+            <span>Up to {DEMO_FILE_LIMIT} files</span>
           </div>
         </>
       )}
+
+      {/* Demo Quota Modal */}
+      <QuotaModal
+        isOpen={showQuotaModal}
+        onClose={() => setShowQuotaModal(false)}
+      />
     </div>
   );
 };
