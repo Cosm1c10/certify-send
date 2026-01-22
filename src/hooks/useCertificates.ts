@@ -6,6 +6,7 @@ import { FileWithBase64 } from '@/components/DropZone';
 
 interface EdgeFunctionResponse {
   supplier_name: string;
+  certificate_number: string;
   country: string;
   product_category: string;
   ec_regulation: string;
@@ -78,6 +79,7 @@ export const useCertificates = () => {
       id: crypto.randomUUID(),
       fileName: file.name,
       supplierName: data.supplier_name || '',
+      certificateNumber: data.certificate_number || '',
       product: data.product_category || '',
       country: data.country || '',
       ecRegulation: data.ec_regulation || '',

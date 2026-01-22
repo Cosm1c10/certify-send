@@ -2,6 +2,7 @@ const OPENAI_API_KEY = import.meta.env.VITE_OPENAI_API_KEY;
 
 interface CertificateExtractionResult {
   supplier_name: string;
+  certificate_number: string;
   country: string;
   product_category: string;
   ec_regulation: string;
@@ -24,10 +25,20 @@ YOUR GOAL: Classify the certificate into the Client's specific "Measure" buckets
 ### 1. LOGIC MAPPING RULES (CRITICAL)
 
 **FIELD: supplier_name (PRIORITY RULES)**
-- PRIORITY 1 (Filename Rule): Look at the provided 'Filename' in the user message.
-  - If the filename follows the pattern 'Name - ...' (e.g., 'Ahcof - Compostable cert.pdf'), EXTRACT 'Ahcof' as the supplier.
-  - If the filename starts with a Company Name before a dash or separator, use that name.
-- PRIORITY 2 (Document Rule): Only if the filename is generic (like 'scan.pdf', 'document.pdf', or just numbers), extract the 'Holder' or 'Manufacturer' from the certificate image.
+- STEP 1: Check the provided 'Filename' in the user message.
+- STEP 2: IF the filename starts with GENERIC TERMS like "ISO", "DIN", "BRC", "SGS", "Intertek", "Certificate", "Report", "BRCGS", "FSC", "GMP", or any standard/certification name:
+    -> IGNORE the filename completely
+    -> Extract the 'Holder', 'Manufacturer', 'Company Name', or 'Site' from the certificate document text (OCR)
+- STEP 3: IF the filename follows a pattern like 'CompanyName - ...' or 'CompanyName_...' where CompanyName is NOT a generic term:
+    -> Extract the company name before the separator (dash, underscore, space before hyphen)
+    -> Example: 'Ahcof - Compostable cert.pdf' -> use 'Ahcof'
+- STEP 4: IF the filename is generic (like 'scan.pdf', 'document.pdf', numbers only):
+    -> Extract from the document text
+
+**FIELD: certificate_number**
+- Look for: 'Certificate No', 'Certificate Number', 'Registration No', 'Report No', 'Site Code', 'Cert No', 'Reference No', 'License No'
+- Extract the alphanumeric identifier
+- If not found, return empty string ""
 
 **FIELD: ec_regulation (The "Measure" Bucket)**
 Look at the document text and type. You MUST output one of the exact strings below. Do not output the text on the page.
@@ -54,7 +65,7 @@ Look at the document text and type. You MUST output one of the exact strings bel
     -> OUTPUT: "Unknown Measure"
 
 **FIELD: certification**
-* Extract the specific standard name (e.g., "BRCGS", "DIN CERTCO", "Cyclos-HTP").
+* Extract the specific standard name (e.g., "BRCGS", "DIN CERTCO", "Cyclos-HTP", "ISO 22000").
 
 **FIELD: country**
 * Extract ONLY the Country name from the site address.
@@ -71,6 +82,7 @@ Look at the document text and type. You MUST output one of the exact strings bel
 ### 2. RETURN JSON
 {
   "supplier_name": "string",
+  "certificate_number": "string",
   "country": "string",
   "product_category": "string",
   "ec_regulation": "string",

@@ -82,7 +82,7 @@ const ReviewTable = ({ certificates }: ReviewTableProps) => {
   }
 
   return (
-    <div className="border border-gray-200 rounded-xl overflow-hidden min-w-[800px]">
+    <div className="border border-gray-200 rounded-xl overflow-hidden min-w-[900px]">
       <Table>
         <TableHeader>
           <TableRow className="bg-gray-50/80 hover:bg-gray-50/80 border-b border-gray-200">
@@ -90,16 +90,16 @@ const ReviewTable = ({ certificates }: ReviewTableProps) => {
               Supplier
             </TableHead>
             <TableHead className="font-semibold text-gray-700 text-[10px] sm:text-xs uppercase tracking-wider py-3 sm:py-4 px-2 sm:px-4">
-              Country
+              Cert / Report No
             </TableHead>
             <TableHead className="font-semibold text-gray-700 text-[10px] sm:text-xs uppercase tracking-wider py-3 sm:py-4 px-2 sm:px-4">
-              Product
+              Country
             </TableHead>
             <TableHead className="font-semibold text-gray-700 text-[10px] sm:text-xs uppercase tracking-wider py-3 sm:py-4 px-2 sm:px-4">
               EC Regulation
             </TableHead>
             <TableHead className="font-semibold text-gray-700 text-[10px] sm:text-xs uppercase tracking-wider py-3 sm:py-4 px-2 sm:px-4">
-              Cert
+              Certification
             </TableHead>
             <TableHead className="font-semibold text-gray-700 text-[10px] sm:text-xs uppercase tracking-wider py-3 sm:py-4 px-2 sm:px-4">
               Expiry
@@ -130,16 +130,11 @@ const ReviewTable = ({ certificates }: ReviewTableProps) => {
                 <TableCell className="font-medium text-gray-900 py-3 sm:py-4 px-2 sm:px-4 text-xs sm:text-sm">
                   {cert.supplierName || <span className="text-gray-400">-</span>}
                 </TableCell>
+                <TableCell className="text-gray-600 py-3 sm:py-4 px-2 sm:px-4 text-xs sm:text-sm font-mono">
+                  {cert.certificateNumber || <span className="text-gray-400">-</span>}
+                </TableCell>
                 <TableCell className="text-gray-600 py-3 sm:py-4 px-2 sm:px-4 text-xs sm:text-sm">
                   {cert.country || <span className="text-gray-400">-</span>}
-                </TableCell>
-                <TableCell className="max-w-[120px] sm:max-w-[200px] py-3 sm:py-4 px-2 sm:px-4">
-                  <span
-                    className="block truncate text-gray-600 text-xs sm:text-sm"
-                    title={cert.product}
-                  >
-                    {cert.product || <span className="text-gray-400">-</span>}
-                  </span>
                 </TableCell>
                 <TableCell className="max-w-[120px] sm:max-w-[180px] py-3 sm:py-4 px-2 sm:px-4">
                   <span

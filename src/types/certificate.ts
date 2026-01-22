@@ -1,6 +1,7 @@
 export interface CertificateData {
   id: string;
   supplierName: string;
+  certificateNumber: string;
   product: string;
   country: string;
   ecRegulation: string;

@@ -44,17 +44,17 @@ export const exportToExcel = async (certificates: CertificateData[]) => {
 
   const worksheet = workbook.addWorksheet('Certificates');
 
-  // Define columns with headers and widths
+  // Define columns with headers and widths (matching client's Master File)
   worksheet.columns = [
     { header: 'Supplier Name', key: 'supplierName', width: 30 },
+    { header: 'Certificate / Report No', key: 'certificateNumber', width: 22 },
     { header: 'Country', key: 'country', width: 15 },
-    { header: 'Product Category', key: 'productCategory', width: 20 },
     { header: 'EC Regulation Measure', key: 'ecRegulation', width: 40 },
     { header: 'Certification', key: 'certification', width: 18 },
-    { header: 'Date Issued', key: 'dateIssued', width: 12 },
-    { header: 'Date Expired', key: 'dateExpired', width: 14 },
-    { header: 'Cert Status', key: 'certStatus', width: 14 },
-    { header: 'Days to Expiry', key: 'daysToExpiry', width: 14 },
+    { header: 'Issued', key: 'dateIssued', width: 12 },
+    { header: 'Date of Expiry', key: 'dateExpired', width: 14 },
+    { header: 'Status', key: 'certStatus', width: 14 },
+    { header: 'Days to Expire', key: 'daysToExpiry', width: 14 },
   ];
 
   // Style the header row
@@ -75,8 +75,8 @@ export const exportToExcel = async (certificates: CertificateData[]) => {
 
     worksheet.addRow({
       supplierName: cert.supplierName || '',
+      certificateNumber: cert.certificateNumber || '',
       country: cert.country || '',
-      productCategory: cert.product || '',
       ecRegulation: cert.ecRegulation || '',
       certification: cert.certification || '',
       dateIssued: cert.issueDate || '',
@@ -154,11 +154,12 @@ export const exportToExcel = async (certificates: CertificateData[]) => {
   });
 
   // Add alternating row colors for better readability
+  // Column indices: 1=Supplier, 2=CertNo, 3=Country, 4=ECReg, 5=Cert, 6=Issued, 7=Expiry, 8=Status, 9=Days
   worksheet.eachRow((row, rowNumber) => {
     if (rowNumber === 1) return;
     if (rowNumber % 2 === 0) {
       row.eachCell((cell, colNumber) => {
-        // Don't override status/days cells
+        // Don't override status/days cells (columns 8 and 9)
         if (colNumber !== 8 && colNumber !== 9) {
           if (!cell.fill || (cell.fill as ExcelJS.FillPattern).pattern !== 'solid') {
             cell.fill = {
