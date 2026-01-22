@@ -56,44 +56,42 @@ YOUR GOAL: Classify the certificate into the Client's specific "Measure" buckets
 ### 1. LOGIC MAPPING RULES (CRITICAL)
 
 ═══════════════════════════════════════════════════════════════════════════════
-██ FIELD: supplier_name ██ (STRICT BLACKLIST RULE - READ CAREFULLY)
+██ FIELD: supplier_name ██ (STEP-BY-STEP REASONING PROTOCOL)
 ═══════════════════════════════════════════════════════════════════════════════
 
-**BLACKLIST OF GENERIC TERMS** (case-insensitive):
-ISO, DIN, BRC, BRCGS, FSC, SGS, Intertek, Certificate, Report, Test, Migration,
+INSTRUCTION - Follow these steps IN ORDER:
+
+**STEP 1: ANALYZE FILENAME**
+Does the filename start with a generic term like:
+ISO, DIN, BRC, BRCGS, SGS, Intertek, Certificate, Report, Test, Migration,
 GMP, TUV, Cyclos, EN, HACCP, IFS, SQF, FSSC, Halal, Kosher, Organic, GFSI,
-Compostable, Recyclable, Declaration, Compliance, Audit, Assessment, Analysis
+Compostable, Recyclable, Declaration, Compliance, Audit, Assessment, Analysis, FSC
 
-**RULE 1: FILENAME BLACKLIST CHECK (MANDATORY FIRST STEP)**
-Before doing ANYTHING else, check if the filename starts with ANY blacklisted term.
+**STEP 2: DECISION**
+  - IF GENERIC (e.g. "DIN compostable.pdf", "ISO 9001.pdf", "BRC Certificate.pdf"):
+    ╔══════════════════════════════════════════════════════════════════════════╗
+    ║  🛑 STOP. Do NOT use the filename for supplier_name.                     ║
+    ║  You MUST search the DOCUMENT TEXT for:                                  ║
+    ║  - "Certificate Holder" / "Holder"                                       ║
+    ║  - "Manufacturer"                                                        ║
+    ║  - "Company Name" / "Site" / "Site Name"                                 ║
+    ║  - "Certified Organization" / "Applicant" / "Customer"                   ║
+    ╚══════════════════════════════════════════════════════════════════════════╝
 
-IF the filename starts with a blacklisted term (e.g., "DIN compostable", "ISO 9001", "BRC Certificate", "SGS Report"):
+  - IF SPECIFIC (e.g. "Ahcof - Compostable cert.pdf", "Hunan Kyson_certificate.pdf"):
+    You MAY use the company name from the filename (the part before the separator).
+    Example: "Ahcof - Compostable cert.pdf" → supplier_name = "Ahcof"
+
+**STEP 3: FINAL CHECK (CRITICAL - NEGATIVE CONSTRAINT)**
+After extracting the supplier_name, check your result:
   ╔══════════════════════════════════════════════════════════════════════════╗
-  ║  🚫 COMPLETELY IGNORE THE FILENAME - DO NOT USE IT FOR SUPPLIER NAME 🚫  ║
+  ║  ⚠️ IF the extracted name is ANY of these, REJECT IT:                    ║
+  ║  "DIN", "ISO", "BRC", "SGS", "TUV", "Global Standard", "Certificate",    ║
+  ║  "Intertek", "Cyclos", "BRCGS", "GMP", "HACCP", "FSC", "EN"              ║
   ║                                                                          ║
-  ║  You MUST extract the supplier from the DOCUMENT TEXT by looking for:    ║
-  ║  - "Certificate Holder"                                                  ║
-  ║  - "Holder"                                                              ║
-  ║  - "Manufacturer"                                                        ║
-  ║  - "Company Name"                                                        ║
-  ║  - "Site" or "Site Name"                                                 ║
-  ║  - "Certified Organization"                                              ║
-  ║  - "Applicant"                                                           ║
-  ║  - "Customer"                                                            ║
+  ║  → Go back and search the document text for the ACTUAL company name      ║
+  ║    (e.g., "Hunan Kyson", "Ahcof International", "XYZ Packaging Co.")     ║
   ╚══════════════════════════════════════════════════════════════════════════╝
-
-**RULE 2: COMPANY-PATTERN FILENAME (ONLY IF RULE 1 PASSES)**
-IF the filename does NOT start with a blacklisted term AND follows a pattern like:
-  - "CompanyName - something.pdf"
-  - "CompanyName_something.pdf"
-  - "CompanyName something.pdf"
-THEN: Extract the first part as the company name.
-  Example: "Ahcof - Compostable cert.pdf" → supplier_name = "Ahcof"
-  Example: "Hunan Kyson_certificate.pdf" → supplier_name = "Hunan Kyson"
-
-**RULE 3: GENERIC FILENAME FALLBACK**
-IF the filename is generic (e.g., "scan.pdf", "document.pdf", "123456.pdf"):
-THEN: Extract supplier from document text (same as Rule 1).
 
 ═══════════════════════════════════════════════════════════════════════════════
 
