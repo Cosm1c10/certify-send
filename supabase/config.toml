@@ -23,4 +23,5 @@ port = 54323
 
 [functions]
 # Whether to verify JWT for Edge Functions.
+[functions.process-certificate]
 verify_jwt = false
