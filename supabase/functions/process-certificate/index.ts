@@ -55,16 +55,47 @@ YOUR GOAL: Classify the certificate into the Client's specific "Measure" buckets
 
 ### 1. LOGIC MAPPING RULES (CRITICAL)
 
-**FIELD: supplier_name (PRIORITY RULES)**
-- STEP 1: Check the provided 'Filename' in the user message.
-- STEP 2: IF the filename starts with GENERIC TERMS like "ISO", "DIN", "BRC", "SGS", "Intertek", "Certificate", "Report", "BRCGS", "FSC", "GMP", or any standard/certification name:
-    -> IGNORE the filename completely
-    -> Extract the 'Holder', 'Manufacturer', 'Company Name', or 'Site' from the certificate document text (OCR)
-- STEP 3: IF the filename follows a pattern like 'CompanyName - ...' or 'CompanyName_...' where CompanyName is NOT a generic term:
-    -> Extract the company name before the separator (dash, underscore, space before hyphen)
-    -> Example: 'Ahcof - Compostable cert.pdf' -> use 'Ahcof'
-- STEP 4: IF the filename is generic (like 'scan.pdf', 'document.pdf', numbers only):
-    -> Extract from the document text
+═══════════════════════════════════════════════════════════════════════════════
+██ FIELD: supplier_name ██ (STRICT BLACKLIST RULE - READ CAREFULLY)
+═══════════════════════════════════════════════════════════════════════════════
+
+**BLACKLIST OF GENERIC TERMS** (case-insensitive):
+ISO, DIN, BRC, BRCGS, FSC, SGS, Intertek, Certificate, Report, Test, Migration,
+GMP, TUV, Cyclos, EN, HACCP, IFS, SQF, FSSC, Halal, Kosher, Organic, GFSI,
+Compostable, Recyclable, Declaration, Compliance, Audit, Assessment, Analysis
+
+**RULE 1: FILENAME BLACKLIST CHECK (MANDATORY FIRST STEP)**
+Before doing ANYTHING else, check if the filename starts with ANY blacklisted term.
+
+IF the filename starts with a blacklisted term (e.g., "DIN compostable", "ISO 9001", "BRC Certificate", "SGS Report"):
+  ╔══════════════════════════════════════════════════════════════════════════╗
+  ║  🚫 COMPLETELY IGNORE THE FILENAME - DO NOT USE IT FOR SUPPLIER NAME 🚫  ║
+  ║                                                                          ║
+  ║  You MUST extract the supplier from the DOCUMENT TEXT by looking for:    ║
+  ║  - "Certificate Holder"                                                  ║
+  ║  - "Holder"                                                              ║
+  ║  - "Manufacturer"                                                        ║
+  ║  - "Company Name"                                                        ║
+  ║  - "Site" or "Site Name"                                                 ║
+  ║  - "Certified Organization"                                              ║
+  ║  - "Applicant"                                                           ║
+  ║  - "Customer"                                                            ║
+  ╚══════════════════════════════════════════════════════════════════════════╝
+
+**RULE 2: COMPANY-PATTERN FILENAME (ONLY IF RULE 1 PASSES)**
+IF the filename does NOT start with a blacklisted term AND follows a pattern like:
+  - "CompanyName - something.pdf"
+  - "CompanyName_something.pdf"
+  - "CompanyName something.pdf"
+THEN: Extract the first part as the company name.
+  Example: "Ahcof - Compostable cert.pdf" → supplier_name = "Ahcof"
+  Example: "Hunan Kyson_certificate.pdf" → supplier_name = "Hunan Kyson"
+
+**RULE 3: GENERIC FILENAME FALLBACK**
+IF the filename is generic (e.g., "scan.pdf", "document.pdf", "123456.pdf"):
+THEN: Extract supplier from document text (same as Rule 1).
+
+═══════════════════════════════════════════════════════════════════════════════
 
 **FIELD: certificate_number**
 - Look for: 'Certificate No', 'Certificate Number', 'Registration No', 'Report No', 'Site Code', 'Cert No', 'Reference No', 'License No'
