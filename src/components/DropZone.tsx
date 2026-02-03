@@ -1,14 +1,11 @@
 import { useCallback, useState } from 'react';
 import { Upload, Loader2, FileUp } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import QuotaModal from './QuotaModal';
-
-// Demo quota limit - maximum files per session
-const DEMO_FILE_LIMIT = 5;
 
 export interface FileWithBase64 {
   file: File;
   base64Image: string;
+  pageNumber?: number; // For multi-page PDFs
 }
 
 interface DropZoneProps {
@@ -17,13 +14,29 @@ interface DropZoneProps {
   processingProgress?: { current: number; total: number };
 }
 
+const SUPPORTED_IMAGE_TYPES = ['image/jpeg', 'image/jpg', 'image/png'];
+const SUPPORTED_PDF_TYPE = 'application/pdf';
+
 const DropZone = ({ onFilesProcess, isProcessing, processingProgress }: DropZoneProps) => {
   const [isDragging, setIsDragging] = useState(false);
   const [isConverting, setIsConverting] = useState(false);
   const [conversionProgress, setConversionProgress] = useState({ current: 0, total: 0 });
-  const [showQuotaModal, setShowQuotaModal] = useState(false);
 
-  const convertPdfToBase64 = useCallback(async (file: File): Promise<string> => {
+  // Convert image file directly to base64
+  const convertImageToBase64 = useCallback(async (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result as string;
+        resolve(result);
+      };
+      reader.onerror = () => reject(new Error('Failed to read image file'));
+      reader.readAsDataURL(file);
+    });
+  }, []);
+
+  // Convert PDF to base64 images - extracts ALL pages
+  const convertPdfToBase64 = useCallback(async (file: File): Promise<string[]> => {
     const pdfjsLib = await import('pdfjs-dist');
     pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
       'pdfjs-dist/build/pdf.worker.min.mjs',
@@ -32,56 +45,83 @@ const DropZone = ({ onFilesProcess, isProcessing, processingProgress }: DropZone
 
     const arrayBuffer = await file.arrayBuffer();
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-    const page = await pdf.getPage(1);
 
-    const scale = 2;
-    const viewport = page.getViewport({ scale });
+    const pageImages: string[] = [];
+    const numPages = pdf.numPages;
 
-    const canvas = document.createElement('canvas');
-    const context = canvas.getContext('2d')!;
-    canvas.height = viewport.height;
-    canvas.width = viewport.width;
+    // Extract EVERY page as a separate image
+    for (let pageNum = 1; pageNum <= numPages; pageNum++) {
+      const page = await pdf.getPage(pageNum);
 
-    await page.render({
-      canvasContext: context,
-      viewport: viewport,
-    }).promise;
+      const scale = 2;
+      const viewport = page.getViewport({ scale });
 
-    return canvas.toDataURL('image/png');
+      const canvas = document.createElement('canvas');
+      const context = canvas.getContext('2d')!;
+      canvas.height = viewport.height;
+      canvas.width = viewport.width;
+
+      await page.render({
+        canvasContext: context,
+        viewport: viewport,
+      }).promise;
+
+      pageImages.push(canvas.toDataURL('image/png'));
+    }
+
+    return pageImages;
   }, []);
 
   const processFiles = useCallback(async (files: File[]) => {
-    const pdfFiles = files.filter(file => file.type === 'application/pdf');
+    // Filter for supported file types (PDFs and images)
+    const supportedFiles = files.filter(file =>
+      file.type === SUPPORTED_PDF_TYPE || SUPPORTED_IMAGE_TYPES.includes(file.type)
+    );
 
-    if (pdfFiles.length === 0) {
-      alert('Please upload PDF files');
+    if (supportedFiles.length === 0) {
+      alert('Please upload PDF or image files (JPG, PNG)');
       return;
     }
 
-    // Check demo quota limit
-    if (pdfFiles.length > DEMO_FILE_LIMIT) {
-      setShowQuotaModal(true);
-      return;
-    }
-
-    if (pdfFiles.length !== files.length) {
-      alert(`${files.length - pdfFiles.length} non-PDF files were skipped`);
+    const skippedCount = files.length - supportedFiles.length;
+    if (skippedCount > 0) {
+      alert(`${skippedCount} unsupported file(s) were skipped`);
     }
 
     setIsConverting(true);
-    setConversionProgress({ current: 0, total: pdfFiles.length });
+    setConversionProgress({ current: 0, total: supportedFiles.length });
 
     const convertedFiles: FileWithBase64[] = [];
 
-    for (let i = 0; i < pdfFiles.length; i++) {
-      const file = pdfFiles[i];
-      setConversionProgress({ current: i + 1, total: pdfFiles.length });
+    for (let i = 0; i < supportedFiles.length; i++) {
+      const file = supportedFiles[i];
+      setConversionProgress({ current: i + 1, total: supportedFiles.length });
 
       try {
-        const base64Image = await convertPdfToBase64(file);
-        convertedFiles.push({ file, base64Image });
+        if (file.type === SUPPORTED_PDF_TYPE) {
+          // PDF file - extract all pages
+          const pageImages = await convertPdfToBase64(file);
+
+          if (pageImages.length === 1) {
+            // Single page PDF - no page number suffix needed
+            convertedFiles.push({ file, base64Image: pageImages[0] });
+          } else {
+            // Multi-page PDF - create separate entries for each page
+            pageImages.forEach((base64Image, pageIndex) => {
+              convertedFiles.push({
+                file,
+                base64Image,
+                pageNumber: pageIndex + 1,
+              });
+            });
+          }
+        } else {
+          // Image file - convert directly to base64
+          const base64Image = await convertImageToBase64(file);
+          convertedFiles.push({ file, base64Image });
+        }
       } catch (error) {
-        console.error(`Error converting PDF ${file.name}:`, error);
+        console.error(`Error converting file ${file.name}:`, error);
       }
     }
 
@@ -91,9 +131,9 @@ const DropZone = ({ onFilesProcess, isProcessing, processingProgress }: DropZone
     if (convertedFiles.length > 0) {
       onFilesProcess(convertedFiles);
     } else {
-      alert('Failed to convert any PDF files');
+      alert('Failed to convert any files');
     }
-  }, [convertPdfToBase64, onFilesProcess]);
+  }, [convertPdfToBase64, convertImageToBase64, onFilesProcess]);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -124,7 +164,7 @@ const DropZone = ({ onFilesProcess, isProcessing, processingProgress }: DropZone
 
   const getProgressText = () => {
     if (isConverting) {
-      return `Converting PDFs... ${conversionProgress.current} of ${conversionProgress.total}`;
+      return `Converting files... ${conversionProgress.current} of ${conversionProgress.total}`;
     }
     if (isProcessing && processingProgress) {
       return `Analyzing certificates... ${processingProgress.current} of ${processingProgress.total}`;
@@ -159,7 +199,7 @@ const DropZone = ({ onFilesProcess, isProcessing, processingProgress }: DropZone
     >
       <input
         type="file"
-        accept=".pdf"
+        accept=".pdf,.jpg,.jpeg,.png"
         multiple
         onChange={handleFileSelect}
         className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
@@ -203,7 +243,7 @@ const DropZone = ({ onFilesProcess, isProcessing, processingProgress }: DropZone
           </div>
           <div className="text-center">
             <p className="text-sm sm:text-base font-medium text-gray-900">
-              {isDragging ? 'Drop your files here' : 'Drop PDF certificates here'}
+              {isDragging ? 'Drop your files here' : 'Drop certificates here'}
             </p>
             <p className="text-xs sm:text-sm text-gray-500 mt-1">
               or <span className="text-yellow-600 font-medium">tap to browse</span> your files
@@ -211,16 +251,12 @@ const DropZone = ({ onFilesProcess, isProcessing, processingProgress }: DropZone
           </div>
           <div className="flex items-center gap-2 text-[10px] sm:text-xs text-gray-400">
             <span className="px-1.5 sm:px-2 py-0.5 bg-gray-100 rounded">PDF</span>
-            <span>Up to {DEMO_FILE_LIMIT} files</span>
+            <span className="px-1.5 sm:px-2 py-0.5 bg-gray-100 rounded">JPG</span>
+            <span className="px-1.5 sm:px-2 py-0.5 bg-gray-100 rounded">PNG</span>
+            <span>Multi-page supported</span>
           </div>
         </>
       )}
-
-      {/* Demo Quota Modal */}
-      <QuotaModal
-        isOpen={showQuotaModal}
-        onClose={() => setShowQuotaModal(false)}
-      />
     </div>
   );
 };

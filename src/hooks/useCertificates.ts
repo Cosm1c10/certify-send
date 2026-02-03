@@ -7,12 +7,15 @@ import { FileWithBase64 } from '@/components/DropZone';
 interface EdgeFunctionResponse {
   supplier_name: string;
   certificate_number: string;
-  country: string;
-  product_category: string;
+  country?: string;       // Legacy field
+  region?: string;        // New field (v2)
+  product_category?: string;
   ec_regulation: string;
   certification: string;
   date_issued: string;
-  date_expired: string;
+  date_expired?: string;  // Legacy field
+  date_expiry?: string;   // New field (v2)
+  status?: string;        // New field (v2)
 }
 
 interface ProcessingProgress {
@@ -49,7 +52,7 @@ export const useCertificates = () => {
   const [processingProgress, setProcessingProgress] = useState<ProcessingProgress>({ current: 0, total: 0 });
   const [processingErrors, setProcessingErrors] = useState<string[]>([]);
 
-  const processSingleCertificate = async (file: File, base64Image: string): Promise<CertificateData> => {
+  const processSingleCertificate = async (file: File, base64Image: string, pageNumber?: number): Promise<CertificateData> => {
     let data: EdgeFunctionResponse;
 
     if (USE_LOCAL_OPENAI) {
@@ -75,19 +78,26 @@ export const useCertificates = () => {
       data = responseData;
     }
 
+    // Handle both v1 (country, date_expired) and v2 (region, date_expiry) field names
+    const expiryDate = data.date_expiry || data.date_expired || '';
+    const country = data.region || data.country || '';
+
+    // For multi-page PDFs, append page number to filename
+    const displayFileName = pageNumber ? `${file.name} (Page ${pageNumber})` : file.name;
+
     return {
       id: crypto.randomUUID(),
-      fileName: file.name,
+      fileName: displayFileName,
       supplierName: data.supplier_name || '',
       certificateNumber: data.certificate_number || '',
       product: data.product_category || '',
-      country: data.country || '',
+      country: country,
       ecRegulation: data.ec_regulation || '',
       certification: data.certification || '',
       certType: data.certification || '',
       issueDate: data.date_issued || '',
-      expiryDate: data.date_expired || '',
-      status: determineStatus(data.date_expired),
+      expiryDate: expiryDate,
+      status: determineStatus(expiryDate),
     };
   };
 
@@ -102,17 +112,18 @@ export const useCertificates = () => {
     const errors: string[] = [];
 
     for (let i = 0; i < files.length; i++) {
-      const { file, base64Image } = files[i];
+      const { file, base64Image, pageNumber } = files[i];
+      const displayName = pageNumber ? `${file.name} (Page ${pageNumber})` : file.name;
       setProcessingProgress({ current: i + 1, total: files.length });
 
       try {
-        console.log(`Processing ${i + 1}/${files.length}: ${file.name}`);
-        const newCertificate = await processSingleCertificate(file, base64Image);
+        console.log(`Processing ${i + 1}/${files.length}: ${displayName}`);
+        const newCertificate = await processSingleCertificate(file, base64Image, pageNumber);
         setCertificates((prev) => [...prev, newCertificate]);
       } catch (error) {
-        console.error(`Error processing ${file.name}:`, error);
+        console.error(`Error processing ${displayName}:`, error);
         const message = error instanceof Error ? error.message : 'Unknown error';
-        errors.push(`${file.name}: ${message}`);
+        errors.push(`${displayName}: ${message}`);
       }
     }
 

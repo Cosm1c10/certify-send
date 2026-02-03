@@ -44,6 +44,13 @@ export const exportToExcel = async (certificates: CertificateData[]) => {
 
   const worksheet = workbook.addWorksheet('Certificates');
 
+  // Sort certificates alphabetically by supplier_name for grouping
+  const sortedCertificates = [...certificates].sort((a, b) => {
+    const nameA = (a.supplierName || '').toLowerCase();
+    const nameB = (b.supplierName || '').toLowerCase();
+    return nameA.localeCompare(nameB);
+  });
+
   // Define columns with headers and widths (matching client's Master File)
   worksheet.columns = [
     { header: 'Supplier Name', key: 'supplierName', width: 30 },
@@ -68,8 +75,8 @@ export const exportToExcel = async (certificates: CertificateData[]) => {
   headerRow.alignment = { horizontal: 'center', vertical: 'middle' };
   headerRow.height = 25;
 
-  // Add data rows
-  certificates.forEach((cert) => {
+  // Add data rows (using sorted certificates for supplier grouping)
+  sortedCertificates.forEach((cert) => {
     const daysToExpiry = calculateDaysToExpiry(cert.expiryDate);
     const status = getClientStatus(daysToExpiry);
 
