@@ -5,7 +5,6 @@ import { cn } from '@/lib/utils';
 export interface FileWithBase64 {
   file: File;
   base64Image: string;
-  pageNumber?: number; // For multi-page PDFs
 }
 
 interface DropZoneProps {
@@ -35,8 +34,8 @@ const DropZone = ({ onFilesProcess, isProcessing, processingProgress }: DropZone
     });
   }, []);
 
-  // Convert PDF to base64 images - extracts ALL pages
-  const convertPdfToBase64 = useCallback(async (file: File): Promise<string[]> => {
+  // Convert PDF to base64 image - extracts ONLY PAGE 1
+  const convertPdfToBase64 = useCallback(async (file: File): Promise<string> => {
     const pdfjsLib = await import('pdfjs-dist');
     pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
       'pdfjs-dist/build/pdf.worker.min.mjs',
@@ -46,31 +45,24 @@ const DropZone = ({ onFilesProcess, isProcessing, processingProgress }: DropZone
     const arrayBuffer = await file.arrayBuffer();
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
 
-    const pageImages: string[] = [];
-    const numPages = pdf.numPages;
+    // Extract ONLY page 1
+    const page = await pdf.getPage(1);
 
-    // Extract EVERY page as a separate image
-    for (let pageNum = 1; pageNum <= numPages; pageNum++) {
-      const page = await pdf.getPage(pageNum);
+    const scale = 2;
+    const viewport = page.getViewport({ scale });
 
-      const scale = 2;
-      const viewport = page.getViewport({ scale });
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d')!;
+    canvas.height = viewport.height;
+    canvas.width = viewport.width;
 
-      const canvas = document.createElement('canvas');
-      const context = canvas.getContext('2d')!;
-      canvas.height = viewport.height;
-      canvas.width = viewport.width;
+    await page.render({
+      canvasContext: context,
+      viewport: viewport,
+      canvas: canvas,
+    } as Parameters<typeof page.render>[0]).promise;
 
-      await page.render({
-        canvasContext: context,
-        viewport: viewport,
-        canvas: canvas,
-      } as Parameters<typeof page.render>[0]).promise;
-
-      pageImages.push(canvas.toDataURL('image/png'));
-    }
-
-    return pageImages;
+    return canvas.toDataURL('image/png');
   }, []);
 
   const processFiles = useCallback(async (files: File[]) => {
@@ -106,22 +98,9 @@ const DropZone = ({ onFilesProcess, isProcessing, processingProgress }: DropZone
 
       try {
         if (file.type === SUPPORTED_PDF_TYPE) {
-          // PDF file - extract all pages
-          const pageImages = await convertPdfToBase64(file);
-
-          if (pageImages.length === 1) {
-            // Single page PDF - no page number suffix needed
-            convertedFiles.push({ file, base64Image: pageImages[0] });
-          } else {
-            // Multi-page PDF - create separate entries for each page
-            pageImages.forEach((base64Image, pageIndex) => {
-              convertedFiles.push({
-                file,
-                base64Image,
-                pageNumber: pageIndex + 1,
-              });
-            });
-          }
+          // PDF file - extract page 1 only
+          const base64Image = await convertPdfToBase64(file);
+          convertedFiles.push({ file, base64Image });
         } else {
           // Image file - convert directly to base64
           const base64Image = await convertImageToBase64(file);
@@ -260,7 +239,7 @@ const DropZone = ({ onFilesProcess, isProcessing, processingProgress }: DropZone
             <span className="px-1.5 sm:px-2 py-0.5 bg-gray-100 rounded">PDF</span>
             <span className="px-1.5 sm:px-2 py-0.5 bg-gray-100 rounded">JPG</span>
             <span className="px-1.5 sm:px-2 py-0.5 bg-gray-100 rounded">PNG</span>
-            <span>Multi-page supported</span>
+            <span>Unlimited files</span>
           </div>
         </>
       )}

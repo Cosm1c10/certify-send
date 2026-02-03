@@ -53,7 +53,7 @@ export const useCertificates = () => {
   // Processing lock to prevent double-triggering
   const isProcessingRef = useRef(false);
 
-  const processSingleCertificate = async (file: File, base64Image: string, pageNumber?: number): Promise<CertificateData> => {
+  const processSingleCertificate = async (file: File, base64Image: string): Promise<CertificateData> => {
     let data: EdgeFunctionResponse;
 
     if (USE_LOCAL_OPENAI) {
@@ -83,12 +83,9 @@ export const useCertificates = () => {
     const expiryDate = data.date_expiry || data.date_expired || '';
     const country = data.region || data.country || '';
 
-    // For multi-page PDFs, append page number to filename
-    const displayFileName = pageNumber ? `${file.name} (Page ${pageNumber})` : file.name;
-
     return {
       id: crypto.randomUUID(),
-      fileName: displayFileName,
+      fileName: file.name,
       supplierName: data.supplier_name || '',
       certificateNumber: data.certificate_number || '',
       product: data.product_category || '',
@@ -123,18 +120,17 @@ export const useCertificates = () => {
 
     // Process ALL files first, collect results into local array
     for (let i = 0; i < files.length; i++) {
-      const { file, base64Image, pageNumber } = files[i];
-      const displayName = pageNumber ? `${file.name} (Page ${pageNumber})` : file.name;
+      const { file, base64Image } = files[i];
       setProcessingProgress({ current: i + 1, total: files.length });
 
       try {
-        console.log(`Processing ${i + 1}/${files.length}: ${displayName}`);
-        const newCertificate = await processSingleCertificate(file, base64Image, pageNumber);
+        console.log(`Processing ${i + 1}/${files.length}: ${file.name}`);
+        const newCertificate = await processSingleCertificate(file, base64Image);
         newCertificates.push(newCertificate);
       } catch (error) {
-        console.error(`Error processing ${displayName}:`, error);
+        console.error(`Error processing ${file.name}:`, error);
         const message = error instanceof Error ? error.message : 'Unknown error';
-        errors.push(`${displayName}: ${message}`);
+        errors.push(`${file.name}: ${message}`);
       }
     }
 
