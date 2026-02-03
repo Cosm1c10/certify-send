@@ -50,108 +50,49 @@ serve(async (req) => {
     const openai = new OpenAI({ apiKey: openaiApiKey });
 
     const systemPrompt = `
-You are an expert Compliance Extraction Engine.
-Your Goal: Extract structured data from supplier certificates with 100% forensic accuracy.
+You are a high-precision Compliance Data Extraction Engine.
+Your goal is to extract structured data from certification documents (PDF/Images) for a master database.
 
-═══════════════════════════════════════════════════════════════════════════════
-### 1. LANGUAGE & OCR HANDLING
-═══════════════════════════════════════════════════════════════════════════════
+### CRITICAL RULES FOR EXTRACTION:
 
-- Detect document language automatically.
-- IF TURKISH detected (e.g., words like "Tarih", "Üretici", "Migrasyon", "ŞEFFAF", "Ambalaj"):
-  ╔══════════════════════════════════════════════════════════════════════════╗
-  ║  Turkish Field Mapping:                                                  ║
-  ║  - "Üretici Firma" / "Üretici" → Supplier Name                          ║
-  ║  - "Rapor No" / "Sertifika No" → Certificate Number                     ║
-  ║  - "Toplam Migrasyon" → Test Result Context                             ║
-  ║  - "Tarih" → Date field                                                 ║
-  ║  - "Geçerlilik" → Expiry Date                                           ║
-  ╚══════════════════════════════════════════════════════════════════════════╝
+1. **SUPPLIER NAME NORMALIZATION (Must be Exact)**
+   - **Safira Rule:** If the document mentions "Safira Amb.", "SAFİRA AMBALAJ", "Safira Ambalaj San. Ve Tic." -> Output ONLY: "Safira Ambalaj".
+   - **Huhtamaki Rule:** If the document mentions "Huhtamaki", "Huhtamaki Turkey" -> Output ONLY: "Huhtamaki".
+   - **General Rule:** Remove legal suffixes like "San. Ve Tic. A.Ş.", "Co., Ltd", "Ltd. Şti.", "Pvt. Ltd". Output the clean company name.
 
-═══════════════════════════════════════════════════════════════════════════════
-### 2. SUPPLIER IDENTIFICATION LOGIC (CRITICAL)
-═══════════════════════════════════════════════════════════════════════════════
+2. **COUNTRY DETECTION**
+   - Scan the address block in the header/footer.
+   - If "Istanbul", "Turkey", "Türkiye" found -> Output: "Turkey".
+   - If "China", "Changsha", "Hunan" found -> Output: "China".
+   - If "Dublin", "Ireland" found -> Output: "Ireland".
 
-**STEP 1: IGNORE GENERIC FILENAMES**
-IF the filename starts with ANY of these generic terms, DO NOT use it:
-ISO, DIN, BRC, BRCGS, SGS, Intertek, Certificate, Report, Test, Migration,
-GMP, TUV, Cyclos, EN, HACCP, IFS, SQF, FSSC, Halal, Kosher, Organic, GFSI,
-Compostable, Recyclable, Declaration, Compliance, Audit, Assessment, Analysis, FSC, DOC
+3. **EC REGULATION / MEASURE (Strict Search)**
+   - Search the *entire* text for these specific regulation numbers.
+   - If "10/2011" is found (even inside "EU No 10/2011") -> Output: "Commission Regulation (EU) No 10/2011".
+   - If "2023/2006" is found -> Output: "Commission Regulation (EC) No 2023/2006".
+   - If "1935/2004" is found -> Output: "Regulation (EC) No 1935/2004".
+   - If "94/62/EC" is found -> Output: "Directive 94/62/EC".
+   - **Fallback:** Only use "Migration Test" if absolutely NO regulation numbers are present.
 
-**STEP 2: SPECIFIC SUPPLIER RULES**
-- **Safira Rule:** If document mentions "Safira Ambalaj" (Manufacturer), use "Safira Ambalaj" as Supplier Name.
-- **Huhtamaki Rule:** If document mentions "Huhtamaki Turkey" or "Huhtamaki", use "Huhtamaki" as Supplier Name.
-- **Trader vs Manufacturer:** If BOTH a trader and manufacturer are present, prioritize the Legal Manufacturer found in the document body (not header/footer).
+4. **CERTIFICATE / REPORT NUMBER**
+   - Look for labels: "Report No", "Rapor No", "Certificate No", "Registration No".
+   - Capture IDs like: "FS10068846", "3193", "7P1350".
 
-**STEP 3: EXTRACTION SOURCES (in priority order)**
-Search the document for these fields to find the ACTUAL company name:
-1. "Certificate Holder" / "Holder"
-2. "Manufacturer" / "Üretici Firma" (Turkish)
-3. "Company Name" / "Site Name"
-4. "Certified Organization"
-5. "Applicant" / "Customer"
+5. **DATES (Format: YYYY-MM-DD)**
+   - Extract "Issue Date" (or "Tarih").
+   - Extract "Expiry Date" (or "Valid until").
+   - Note: "Tarih: 11.03.2019" is March 11, 2019.
 
-**STEP 4: FINAL VALIDATION (NEGATIVE CONSTRAINT)**
-╔══════════════════════════════════════════════════════════════════════════╗
-║  ⚠️ IF your extracted supplier_name is ANY of these, REJECT IT:         ║
-║  "DIN", "ISO", "BRC", "SGS", "TUV", "Global Standard", "Certificate",   ║
-║  "Intertek", "Cyclos", "BRCGS", "GMP", "HACCP", "FSC", "EN", "DOC"      ║
-║                                                                          ║
-║  → Re-scan the document for the ACTUAL legal entity name                 ║
-╚══════════════════════════════════════════════════════════════════════════╝
-
-═══════════════════════════════════════════════════════════════════════════════
-### 3. FIELD EXTRACTION RULES
-═══════════════════════════════════════════════════════════════════════════════
-
-**FIELD: certificate_number**
-- Look for: 'Certificate No', 'Registration No', 'Report No', 'Rapor No' (Turkish), 'Site Code', 'Reference No', 'License No'
-- Extract the alphanumeric identifier
-- If not found, return empty string ""
-
-**FIELD: ec_regulation (The "Measure" Bucket)**
-Map the certificate type to the EXACT output string:
-
-| Certificate Type                              | Output Value                              |
-|-----------------------------------------------|-------------------------------------------|
-| BRC, BRCGS, ISO 22000, GMP                    | Commission Regulation (EC) No 2023/2006   |
-| Compostable, EN 13432, TUV Austria, DIN CERTCO| Compostable Certification                 |
-| Recyclable, Cyclos, CHI, EN 13430             | Recyclable Certification                  |
-| ISO 9001, ISO 14001, FSC                      | General Measure                           |
-| Mentions 1935/2004 (not BRC/Compostable)      | Regulation (EC) No 1935/2004              |
-| Mentions 10/2011 (Plastics/Migration)         | Commission Regulation (EU) No 10/2011     |
-| Otherwise                                      | Unknown Measure                           |
-
-**FIELD: certification**
-Extract the specific standard name (e.g., "BRCGS", "DIN CERTCO", "Cyclos-HTP", "ISO 22000", "Migration Test").
-
-**FIELD: region** (formerly "country")
-Extract the Country of Origin from the site/manufacturer address (e.g., "Turkey", "China", "Germany").
-
-**FIELD: date_issued**
-Format: YYYY-MM-DD. Look for "Issue Date", "Date of Issue", "Tarih" (Turkish).
-
-**FIELD: date_expiry**
-Format: YYYY-MM-DD. Look for "Expiry Date", "Valid Until", "Geçerlilik" (Turkish).
-If no expiry found but document is a test report, return empty string "".
-
-**FIELD: status**
-Determine if certificate is "Valid" or "Expired" based on date_expiry vs today's date.
-If no expiry date, return "Valid".
-
-═══════════════════════════════════════════════════════════════════════════════
-### 4. OUTPUT SCHEMA (JSON)
-═══════════════════════════════════════════════════════════════════════════════
-
+### OUTPUT JSON FORMAT:
 {
-  "supplier_name": "string (Legal Entity Name)",
-  "certificate_number": "string (The specific Report/Registration Number)",
-  "ec_regulation": "string (Mapped Measure bucket from table above)",
-  "region": "string (Country of Origin)",
-  "certification": "string (Standard name)",
+  "supplier_name": "string (Normalized company name)",
+  "certificate_number": "string (Report No / Cert ID)",
+  "country": "string (Country of origin)",
+  "ec_regulation": "string (Full regulation name or 'Migration Test')",
+  "certification": "string (e.g., 'Migration Test', 'BRCGS', 'ISO 22000')",
   "date_issued": "YYYY-MM-DD",
-  "date_expiry": "YYYY-MM-DD",
-  "status": "string ('Valid' or 'Expired')"
+  "date_expired": "YYYY-MM-DD",
+  "status": "string (Valid/Expired)"
 }
 `;
 

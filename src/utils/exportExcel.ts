@@ -44,8 +44,24 @@ export const exportToExcel = async (certificates: CertificateData[]) => {
 
   const worksheet = workbook.addWorksheet('Certificates');
 
-  // Sort certificates alphabetically by supplier_name for grouping
-  const sortedCertificates = [...certificates].sort((a, b) => {
+  // STEP 1: Deduplicate by certificate_number (keep first occurrence)
+  const seen = new Set<string>();
+  const uniqueCertificates = certificates.filter((cert) => {
+    // Use certificate_number as unique key, fallback to fileName + supplierName
+    const key = cert.certificateNumber
+      ? cert.certificateNumber
+      : `${cert.fileName}-${cert.supplierName}`;
+
+    if (seen.has(key)) {
+      console.log(`Duplicate skipped: ${key}`);
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+
+  // STEP 2: Sort alphabetically by supplier_name for grouping
+  const sortedCertificates = [...uniqueCertificates].sort((a, b) => {
     const nameA = (a.supplierName || '').toLowerCase();
     const nameB = (b.supplierName || '').toLowerCase();
     return nameA.localeCompare(nameB);

@@ -110,7 +110,9 @@ export const useCertificates = () => {
     setProcessingErrors([]);
 
     const errors: string[] = [];
+    const newCertificates: CertificateData[] = [];
 
+    // Process ALL files first, collect results
     for (let i = 0; i < files.length; i++) {
       const { file, base64Image, pageNumber } = files[i];
       const displayName = pageNumber ? `${file.name} (Page ${pageNumber})` : file.name;
@@ -119,12 +121,17 @@ export const useCertificates = () => {
       try {
         console.log(`Processing ${i + 1}/${files.length}: ${displayName}`);
         const newCertificate = await processSingleCertificate(file, base64Image, pageNumber);
-        setCertificates((prev) => [...prev, newCertificate]);
+        newCertificates.push(newCertificate);
       } catch (error) {
         console.error(`Error processing ${displayName}:`, error);
         const message = error instanceof Error ? error.message : 'Unknown error';
         errors.push(`${displayName}: ${message}`);
       }
+    }
+
+    // Update state ONCE with all new certificates (prevents infinite loop)
+    if (newCertificates.length > 0) {
+      setCertificates((prev) => [...prev, ...newCertificates]);
     }
 
     setIsProcessing(false);
