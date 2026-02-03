@@ -60,11 +60,19 @@ export const exportToExcel = async (certificates: CertificateData[]) => {
     return true;
   });
 
-  // STEP 2: Sort alphabetically by supplier_name for grouping
+  // STEP 2: Sort with primary (supplier_name) and secondary (ec_regulation) keys
   const sortedCertificates = [...uniqueCertificates].sort((a, b) => {
+    // Primary sort: supplier_name (A-Z)
     const nameA = (a.supplierName || '').toLowerCase();
     const nameB = (b.supplierName || '').toLowerCase();
-    return nameA.localeCompare(nameB);
+    const nameCompare = nameA.localeCompare(nameB);
+
+    if (nameCompare !== 0) return nameCompare;
+
+    // Secondary sort: ec_regulation (A-Z)
+    const regA = (a.ecRegulation || '').toLowerCase();
+    const regB = (b.ecRegulation || '').toLowerCase();
+    return regA.localeCompare(regB);
   });
 
   // Define columns with headers and widths (matching client's Master File)
