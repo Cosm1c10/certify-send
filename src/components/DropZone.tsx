@@ -64,7 +64,8 @@ const DropZone = ({ onFilesProcess, isProcessing, processingProgress }: DropZone
       await page.render({
         canvasContext: context,
         viewport: viewport,
-      }).promise;
+        canvas: canvas,
+      } as Parameters<typeof page.render>[0]).promise;
 
       pageImages.push(canvas.toDataURL('image/png'));
     }
@@ -73,6 +74,12 @@ const DropZone = ({ onFilesProcess, isProcessing, processingProgress }: DropZone
   }, []);
 
   const processFiles = useCallback(async (files: File[]) => {
+    // Guard: Prevent processing if already busy
+    if (isProcessing || isConverting) {
+      console.warn('Already processing - ignoring new upload');
+      return;
+    }
+
     // Filter for supported file types (PDFs and images)
     const supportedFiles = files.filter(file =>
       file.type === SUPPORTED_PDF_TYPE || SUPPORTED_IMAGE_TYPES.includes(file.type)

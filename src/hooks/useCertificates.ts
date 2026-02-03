@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { CertificateData } from '@/types/certificate';
 import { supabase } from '@/integrations/supabase/client';
 import { processWithOpenAI } from '@/utils/processWithOpenAI';
@@ -27,8 +27,6 @@ interface ProcessingProgress {
 const USE_LOCAL_OPENAI = !!import.meta.env.VITE_OPENAI_API_KEY && import.meta.env.DEV;
 
 console.log('OpenAI Mode:', USE_LOCAL_OPENAI ? 'LOCAL (direct API)' : 'PRODUCTION (Edge Function)');
-console.log('VITE_OPENAI_API_KEY present:', !!import.meta.env.VITE_OPENAI_API_KEY);
-console.log('DEV mode:', import.meta.env.DEV);
 
 function determineStatus(expiryDate: string): CertificateData['status'] {
   if (!expiryDate || expiryDate === 'Not Found') {
@@ -51,6 +49,9 @@ export const useCertificates = () => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingProgress, setProcessingProgress] = useState<ProcessingProgress>({ current: 0, total: 0 });
   const [processingErrors, setProcessingErrors] = useState<string[]>([]);
+
+  // Processing lock to prevent double-triggering
+  const isProcessingRef = useRef(false);
 
   const processSingleCertificate = async (file: File, base64Image: string, pageNumber?: number): Promise<CertificateData> => {
     let data: EdgeFunctionResponse;
@@ -102,9 +103,17 @@ export const useCertificates = () => {
   };
 
   const analyzeCertificates = useCallback(async (files: FileWithBase64[]) => {
+    // Guard: Prevent double-triggering
     if (files.length === 0) return;
+    if (isProcessingRef.current) {
+      console.warn('Already processing - ignoring duplicate call');
+      return;
+    }
 
-    console.log(`Starting batch processing for ${files.length} files`);
+    // Lock processing
+    isProcessingRef.current = true;
+    console.log(`Starting batch processing for ${files.length} items`);
+
     setIsProcessing(true);
     setProcessingProgress({ current: 0, total: files.length });
     setProcessingErrors([]);
@@ -112,7 +121,7 @@ export const useCertificates = () => {
     const errors: string[] = [];
     const newCertificates: CertificateData[] = [];
 
-    // Process ALL files first, collect results
+    // Process ALL files first, collect results into local array
     for (let i = 0; i < files.length; i++) {
       const { file, base64Image, pageNumber } = files[i];
       const displayName = pageNumber ? `${file.name} (Page ${pageNumber})` : file.name;
@@ -129,13 +138,15 @@ export const useCertificates = () => {
       }
     }
 
-    // Update state ONCE with all new certificates (prevents infinite loop)
+    // ATOMIC UPDATE: Update state ONCE with all new certificates
     if (newCertificates.length > 0) {
       setCertificates((prev) => [...prev, ...newCertificates]);
     }
 
+    // Cleanup
     setIsProcessing(false);
     setProcessingProgress({ current: 0, total: 0 });
+    isProcessingRef.current = false; // Unlock
 
     if (errors.length > 0) {
       setProcessingErrors(errors);
