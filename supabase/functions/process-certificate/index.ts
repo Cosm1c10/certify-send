@@ -22,11 +22,12 @@ serve(async (req) => {
   }
 
   try {
-    const { image, filename } = await req.json();
+    const { image, text, filename } = await req.json();
 
-    if (!image) {
+    // Require either image or text
+    if (!image && !text) {
       return new Response(
-        JSON.stringify({ error: "Missing 'image' field in request body" }),
+        JSON.stringify({ error: "Missing 'image' or 'text' field in request body" }),
         {
           status: 400,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -34,7 +35,8 @@ serve(async (req) => {
       );
     }
 
-    console.log("Processing certificate with filename:", filename || "not provided");
+    const isTextMode = !!text;
+    console.log("Processing certificate with filename:", filename || "not provided", isTextMode ? "(text mode)" : "(image mode)");
 
     const openaiApiKey = Deno.env.get("OPENAI_API_KEY");
     if (!openaiApiKey) {
@@ -51,9 +53,16 @@ serve(async (req) => {
 
     const systemPrompt = `
 You are a Compliance Data Extraction Engine.
-Goal: Extract structured data for the Client Master File with strict "General" vs "Specific" classification.
+Goal: Extract structured data for the Client Master File.
 
-### 1. CLASSIFICATION RULES (CRITICAL)
+### 1. CRITICAL RULES
+
+**MULTI-LANGUAGE DOCUMENT HANDLING:**
+- If a document contains multiple versions of the SAME certificate (e.g., Page 1 Chinese, Page 2 English translation), treat them as a **SINGLE** record.
+- Consolidate the information into ONE JSON entry.
+- **DO NOT** output duplicate rows for translated versions of the same certificate.
+
+### 2. CLASSIFICATION RULES
 
 **Scope Column (The Symbol):**
 - Output "!" (Exclamation Mark) IF:
@@ -106,10 +115,36 @@ Goal: Extract structured data for the Client Master File with strict "General" v
 }
 `;
 
-    // Determine if the image is a data URL or raw base64
-    const imageContent = image.startsWith("data:")
-      ? image
-      : `data:image/jpeg;base64,${image}`;
+    // Build user message content based on input type
+    let userContent: any[];
+
+    if (isTextMode) {
+      // Text mode for DOCX files
+      userContent = [
+        {
+          type: "text",
+          text: `Analyze this certificate document. Filename: "${filename || "unknown.docx"}". Extract all certificate information from the following text:\n\n${text}`,
+        },
+      ];
+    } else {
+      // Image mode for PDF/Image files
+      const imageContent = image.startsWith("data:")
+        ? image
+        : `data:image/jpeg;base64,${image}`;
+
+      userContent = [
+        {
+          type: "image_url",
+          image_url: {
+            url: imageContent,
+          },
+        },
+        {
+          type: "text",
+          text: `Analyze this certificate. Filename: "${filename || "unknown.pdf"}". Extract all certificate information.`,
+        },
+      ];
+    }
 
     const response = await openai.chat.completions.create({
       model: "gpt-4o",
@@ -120,18 +155,7 @@ Goal: Extract structured data for the Client Master File with strict "General" v
         },
         {
           role: "user",
-          content: [
-            {
-              type: "image_url",
-              image_url: {
-                url: imageContent,
-              },
-            },
-            {
-              type: "text",
-              text: `Analyze this certificate. Filename: "${filename || "unknown.pdf"}". Extract all certificate information.`,
-            },
-          ],
+          content: userContent,
         },
       ],
       max_tokens: 1000,

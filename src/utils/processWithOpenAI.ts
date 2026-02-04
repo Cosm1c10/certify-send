@@ -12,18 +12,26 @@ interface CertificateExtractionResult {
   date_expired: string | null;
 }
 
-export async function processWithOpenAI(base64Image: string, filename?: string): Promise<CertificateExtractionResult> {
+export async function processWithOpenAI(base64Image: string, filename?: string, textContent?: string): Promise<CertificateExtractionResult> {
   if (!OPENAI_API_KEY) {
     throw new Error('OpenAI API key not configured. Add VITE_OPENAI_API_KEY to .env.local');
   }
 
-  console.log('Processing certificate with filename:', filename || 'not provided');
+  const isTextOnly = !!textContent && !base64Image;
+  console.log('Processing certificate with filename:', filename || 'not provided', isTextOnly ? '(text mode)' : '(image mode)');
 
   const systemPrompt = `
 You are a Compliance Data Extraction Engine.
-Goal: Extract structured data for the Client Master File with strict "General" vs "Specific" classification.
+Goal: Extract structured data for the Client Master File.
 
-### 1. CLASSIFICATION RULES (CRITICAL)
+### 1. CRITICAL RULES
+
+**MULTI-LANGUAGE DOCUMENT HANDLING:**
+- If a document contains multiple versions of the SAME certificate (e.g., Page 1 Chinese, Page 2 English translation), treat them as a **SINGLE** record.
+- Consolidate the information into ONE JSON entry.
+- **DO NOT** output duplicate rows for translated versions of the same certificate.
+
+### 2. CLASSIFICATION RULES
 
 **Scope Column (The Symbol):**
 - Output "!" (Exclamation Mark) IF:
@@ -76,10 +84,36 @@ Goal: Extract structured data for the Client Master File with strict "General" v
 }
 `;
 
-  // Ensure proper data URL format
-  const imageContent = base64Image.startsWith('data:')
-    ? base64Image
-    : `data:image/jpeg;base64,${base64Image}`;
+  // Build user message content based on input type
+  let userContent: Array<{ type: string; text?: string; image_url?: { url: string } }>;
+
+  if (isTextOnly && textContent) {
+    // Text-only mode for DOCX files
+    userContent = [
+      {
+        type: 'text',
+        text: `Analyze this certificate document. Filename: "${filename || 'unknown.docx'}". Extract all certificate information from the following text:\n\n${textContent}`,
+      },
+    ];
+  } else {
+    // Image mode for PDF/Image files
+    const imageContent = base64Image.startsWith('data:')
+      ? base64Image
+      : `data:image/jpeg;base64,${base64Image}`;
+
+    userContent = [
+      {
+        type: 'image_url',
+        image_url: {
+          url: imageContent,
+        },
+      },
+      {
+        type: 'text',
+        text: `Analyze this certificate. Filename: "${filename || 'unknown.pdf'}". Extract all certificate information.`,
+      },
+    ];
+  }
 
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
@@ -96,18 +130,7 @@ Goal: Extract structured data for the Client Master File with strict "General" v
         },
         {
           role: 'user',
-          content: [
-            {
-              type: 'image_url',
-              image_url: {
-                url: imageContent,
-              },
-            },
-            {
-              type: 'text',
-              text: `Analyze this certificate. Filename: "${filename || 'unknown.pdf'}". Extract all certificate information.`,
-            },
-          ],
+          content: userContent,
         },
       ],
       max_tokens: 1000,

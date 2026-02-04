@@ -1,10 +1,13 @@
 import { useCallback, useState } from 'react';
 import { Upload, Loader2, FileUp } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { extractTextFromDocx } from '@/utils/docxReader';
 
 export interface FileWithBase64 {
   file: File;
   base64Image: string;
+  textContent?: string; // For DOCX files
+  isDocx?: boolean;
 }
 
 interface DropZoneProps {
@@ -15,6 +18,7 @@ interface DropZoneProps {
 
 const SUPPORTED_IMAGE_TYPES = ['image/jpeg', 'image/jpg', 'image/png'];
 const SUPPORTED_PDF_TYPE = 'application/pdf';
+const SUPPORTED_DOCX_TYPE = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
 const DropZone = ({ onFilesProcess, isProcessing, processingProgress }: DropZoneProps) => {
   const [isDragging, setIsDragging] = useState(false);
@@ -72,13 +76,15 @@ const DropZone = ({ onFilesProcess, isProcessing, processingProgress }: DropZone
       return;
     }
 
-    // Filter for supported file types (PDFs and images)
+    // Filter for supported file types (PDFs, images, and DOCX)
     const supportedFiles = files.filter(file =>
-      file.type === SUPPORTED_PDF_TYPE || SUPPORTED_IMAGE_TYPES.includes(file.type)
+      file.type === SUPPORTED_PDF_TYPE ||
+      file.type === SUPPORTED_DOCX_TYPE ||
+      SUPPORTED_IMAGE_TYPES.includes(file.type)
     );
 
     if (supportedFiles.length === 0) {
-      alert('Please upload PDF or image files (JPG, PNG)');
+      alert('Please upload PDF, Word (.docx), or image files (JPG, PNG)');
       return;
     }
 
@@ -97,7 +103,11 @@ const DropZone = ({ onFilesProcess, isProcessing, processingProgress }: DropZone
       setConversionProgress({ current: i + 1, total: supportedFiles.length });
 
       try {
-        if (file.type === SUPPORTED_PDF_TYPE) {
+        if (file.type === SUPPORTED_DOCX_TYPE) {
+          // DOCX file - extract text content
+          const textContent = await extractTextFromDocx(file);
+          convertedFiles.push({ file, base64Image: '', textContent, isDocx: true });
+        } else if (file.type === SUPPORTED_PDF_TYPE) {
           // PDF file - extract page 1 only
           const base64Image = await convertPdfToBase64(file);
           convertedFiles.push({ file, base64Image });
@@ -185,7 +195,7 @@ const DropZone = ({ onFilesProcess, isProcessing, processingProgress }: DropZone
     >
       <input
         type="file"
-        accept=".pdf,.jpg,.jpeg,.png"
+        accept=".pdf,.jpg,.jpeg,.png,.docx"
         multiple
         onChange={handleFileSelect}
         className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
@@ -237,9 +247,9 @@ const DropZone = ({ onFilesProcess, isProcessing, processingProgress }: DropZone
           </div>
           <div className="flex items-center gap-2 text-[10px] sm:text-xs text-gray-400">
             <span className="px-1.5 sm:px-2 py-0.5 bg-gray-100 rounded">PDF</span>
+            <span className="px-1.5 sm:px-2 py-0.5 bg-gray-100 rounded">DOCX</span>
             <span className="px-1.5 sm:px-2 py-0.5 bg-gray-100 rounded">JPG</span>
             <span className="px-1.5 sm:px-2 py-0.5 bg-gray-100 rounded">PNG</span>
-            <span>Unlimited files</span>
           </div>
         </>
       )}

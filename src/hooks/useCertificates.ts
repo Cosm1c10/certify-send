@@ -55,30 +55,52 @@ export const useCertificates = () => {
   // Processing lock to prevent double-triggering
   const isProcessingRef = useRef(false);
 
-  const processSingleCertificate = async (file: File, base64Image: string): Promise<CertificateData> => {
+  const processSingleCertificate = async (file: File, base64Image: string, textContent?: string): Promise<CertificateData> => {
     let data: EdgeFunctionResponse;
+    const isDocx = !!textContent;
 
     if (USE_LOCAL_OPENAI) {
-      console.log('Calling OpenAI API directly for:', file.name);
-      data = await processWithOpenAI(base64Image, file.name);
+      console.log('Calling OpenAI API directly for:', file.name, isDocx ? '(DOCX)' : '');
+      data = await processWithOpenAI(base64Image, file.name, textContent);
     } else {
-      const base64Data = base64Image.replace(/^data:image\/\w+;base64,/, '');
-      const { data: responseData, error } = await supabase.functions.invoke<EdgeFunctionResponse>(
-        'process-certificate',
-        {
-          body: { image: base64Data, filename: file.name },
+      if (isDocx) {
+        // For DOCX files, send text content to a text-processing endpoint
+        // Note: Edge function would need to be updated to handle text input
+        const { data: responseData, error } = await supabase.functions.invoke<EdgeFunctionResponse>(
+          'process-certificate',
+          {
+            body: { text: textContent, filename: file.name },
+          }
+        );
+
+        if (error) {
+          throw new Error(error.message || 'Failed to process certificate');
         }
-      );
 
-      if (error) {
-        throw new Error(error.message || 'Failed to process certificate');
+        if (!responseData) {
+          throw new Error('No data returned from Edge Function');
+        }
+
+        data = responseData;
+      } else {
+        const base64Data = base64Image.replace(/^data:image\/\w+;base64,/, '');
+        const { data: responseData, error } = await supabase.functions.invoke<EdgeFunctionResponse>(
+          'process-certificate',
+          {
+            body: { image: base64Data, filename: file.name },
+          }
+        );
+
+        if (error) {
+          throw new Error(error.message || 'Failed to process certificate');
+        }
+
+        if (!responseData) {
+          throw new Error('No data returned from Edge Function');
+        }
+
+        data = responseData;
       }
-
-      if (!responseData) {
-        throw new Error('No data returned from Edge Function');
-      }
-
-      data = responseData;
     }
 
     // Handle field aliases for backwards compatibility
@@ -127,12 +149,12 @@ export const useCertificates = () => {
 
     // Process ALL files first, collect results into local array
     for (let i = 0; i < files.length; i++) {
-      const { file, base64Image } = files[i];
+      const { file, base64Image, textContent } = files[i];
       setProcessingProgress({ current: i + 1, total: files.length });
 
       try {
         console.log(`Processing ${i + 1}/${files.length}: ${file.name}`);
-        const newCertificate = await processSingleCertificate(file, base64Image);
+        const newCertificate = await processSingleCertificate(file, base64Image, textContent);
         newCertificates.push(newCertificate);
       } catch (error) {
         console.error(`Error processing ${file.name}:`, error);
