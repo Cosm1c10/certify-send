@@ -4,10 +4,10 @@ interface CertificateExtractionResult {
   supplier_name: string;
   certificate_number: string;
   country: string;
-  scope: string;           // Product description
-  measure: string;         // Regulation reference
-  certification: string;
-  product_category: string;
+  scope: string;           // Symbol: "!" (Factory/System) or "+" (Product-specific)
+  measure: string;         // Mapped regulation reference
+  certification: string;   // Document type or certifying body
+  product_category: string; // Product description (detailed)
   date_issued: string;
   date_expired: string | null;
 }
@@ -21,59 +21,55 @@ export async function processWithOpenAI(base64Image: string, filename?: string):
 
   const systemPrompt = `
 You are a Compliance Data Extraction Engine.
-Goal: Extract structured data for the Client Master File.
+Goal: Extract structured data for the Client Master File with strict "General" vs "Specific" classification.
 
-### 1. EXTRACTION RULES
+### 1. CLASSIFICATION RULES (CRITICAL)
 
-**Supplier Name:** Normalize company names.
-- "Safira Amb.", "SAFİRA AMBALAJ", "Safira Ambalaj San. Ve Tic." -> "Safira Ambalaj"
-- "Huhtamaki Turkey", "Huhtamaki" -> "Huhtamaki"
-- Remove legal suffixes: "San. Ve Tic. A.Ş.", "Co., Ltd", "Ltd. Şti.", "Pvt. Ltd"
+**Scope Column (The Symbol):**
+- Output "!" (Exclamation Mark) IF the certificate is for the **Factory/Management System**.
+  - Examples: BRC, BRCGS, ISO 9001, ISO 22000, ISO 45001, ISO 14001, GMP, FSC, GRS, FSSC 22000.
+- Output "+" (Plus Sign) IF the certificate is for a **Specific Product Performance**.
+  - Examples: Compostable (EN 13432), Recyclable (ISO 14021), Migration Test, Food Grade, 10/2011, Declaration of Compliance.
 
-**Country:** Detect from address block.
-- "Istanbul", "Turkey", "Türkiye" -> "Turkey"
-- "China", "Changsha", "Hunan" -> "China"
-- "Dublin", "Ireland" -> "Ireland"
-- "Germany", "Deutschland" -> "Germany"
-- "Poland", "Polska" -> "Poland"
+**Product Category Column (The Description):**
+- EXTRACT the detailed product description here.
+- Examples: "Aqueous Coated Paper Cup", "Blanks of bio coated paper", "Disposable kraft paper cups", "PET Bottles".
+- Do NOT put generic terms like "Paper" or "Plastic". Put the full product string from the certificate.
 
-**Scope:** Short summary of the product covered.
-- Examples: "Aqueous Coated Paper Cup", "PET Bottles", "Food Contact Materials", "Single Wall Cup"
+**Measure Column (The Standard Mapping):**
+- IF ISO 22000 OR BRC OR BRCGS OR ISO 9001 OR FSSC 22000 -> Output: "(EC) No 2023/2006"
+- IF Compostable (DIN CERTCO / TUV / EN 13432) -> Output: "EN 13432 (Compostable)"
+- IF Recyclable (ISO 14021) -> Output: "ISO 14021 (Recyclable)"
+- IF FSC -> Output: "FSC"
+- IF 10/2011 -> Output: "Commission Regulation (EU) No 10/2011"
+- IF 1935/2004 -> Output: "Regulation (EC) No 1935/2004"
+- IF Migration Test (no specific reg) -> Output: "Migration Test"
 
-**Measure (CRITICAL - DO NOT DEFAULT TO "General Compliance"):**
-- ALWAYS look for specific standards. "General Compliance" is ONLY acceptable if NO standard is found.
-- If "EN 13432" or "DIN CERTCO" found -> "EN 13432 (Compostable)"
-- If "10/2011" found -> "Commission Regulation (EU) No 10/2011"
-- If "2023/2006" found -> "Commission Regulation (EC) No 2023/2006"
-- If "1935/2004" found -> "Regulation (EC) No 1935/2004"
-- If "94/62/EC" found -> "Directive 94/62/EC"
-- If "ISO 14021" found -> "ISO 14021 (Recyclable)"
-- If "BRC" or "BRCGS" found -> "BRCGS Global Standard"
-- If "FSC" found -> "FSC Standard"
-- If migration/food contact test -> "Migration Test"
-- ONLY use "General Compliance" as absolute last resort when NO standard numbers exist.
+**Certification Column:** The document type or certifying body.
+- Examples: "BRCGS", "ISO 9001", "ISO 22000", "FSSC 22000", "DIN CERTCO", "TUV", "Migration Test Report", "Declaration of Compliance", "FSC Cert"
 
-**Certification:** The document type or certifying body.
-- Examples: "BRCGS", "ISO 9001", "ISO 22000", "FSSC 22000", "DIN CERTCO", "Migration Test Report", "Declaration of Compliance", "Recyclability Certificate", "FSC Cert", "Halal", "Kosher"
+**Supplier Name:** Normalize to simple name.
+- "Safira Amb.", "SAFİRA AMBALAJ" -> "Safira Ambalaj"
+- "Huhtamaki Turkey" -> "Huhtamaki"
+- Remove legal suffixes: "San. Ve Tic. A.Ş.", "Co., Ltd", "Ltd. Şti."
 
-**Product Category:** Material classification.
-- Options: "Paper", "Rigid Plastics", "Flexible Plastics", "Chemicals", "Metal", "Glass", "Wood"
+**Country:** Detect from address.
+- "Istanbul", "Türkiye" -> "Turkey"
+- "China", "Changsha" -> "China"
 
-**Certificate Number:** Extract from "Report No", "Rapor No", "Certificate No", "Registration No".
+**Certificate Number:** Extract from "Report No", "Certificate No", "Registration No".
 
-**Dates (Format: YYYY-MM-DD):**
-- Extract "Issue Date" (or "Tarih") and "Expiry Date" (or "Valid until")
-- Note: "11.03.2019" = March 11, 2019 (DD.MM.YYYY format)
+**Dates (YYYY-MM-DD):** "11.03.2019" = March 11, 2019 (DD.MM.YYYY format)
 
 ### 2. OUTPUT JSON FORMAT
 {
   "supplier_name": "string",
   "certificate_number": "string",
   "country": "string",
-  "scope": "string",
-  "measure": "string",
-  "certification": "string",
-  "product_category": "string",
+  "scope": "! or +",
+  "measure": "string (Mapped Regulation)",
+  "certification": "string (Document Type)",
+  "product_category": "string (Product Description)",
   "date_issued": "YYYY-MM-DD",
   "date_expired": "YYYY-MM-DD or null"
 }

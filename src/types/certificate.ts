@@ -3,10 +3,10 @@ export interface CertificateData {
   supplierName: string;
   certificateNumber: string;
   country: string;
-  scope: string;           // Product description (e.g., "Paper Cup", "PET Bottles")
-  measure: string;         // Regulation reference (e.g., "Commission Regulation (EU) No 10/2011")
-  certification: string;   // Document type (e.g., "BRCGS", "ISO 9001", "DoC")
-  productCategory: string; // Material type (e.g., "Paper", "Rigid Plastics")
+  scope: string;           // Symbol: "!" (Factory/System cert) or "+" (Product-specific cert)
+  measure: string;         // Mapped regulation (e.g., "(EC) No 2023/2006", "EN 13432 (Compostable)")
+  certification: string;   // Document type (e.g., "BRCGS", "ISO 9001", "DIN CERTCO")
+  productCategory: string; // Product description (e.g., "Aqueous Coated Paper Cup", "PET Bottles")
   issueDate: string;
   expiryDate: string;
   status: 'valid' | 'expired' | 'pending' | 'unknown';
