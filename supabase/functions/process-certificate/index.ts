@@ -56,24 +56,25 @@ Goal: Extract structured data for the Client Master File with strict "General" v
 ### 1. CLASSIFICATION RULES (CRITICAL)
 
 **Scope Column (The Symbol):**
-- Output "!" (Exclamation Mark) IF the certificate is for the **Factory/Management System**.
-  - Examples: BRC, BRCGS, ISO 9001, ISO 22000, ISO 45001, ISO 14001, GMP, FSC, GRS, FSSC 22000.
-- Output "+" (Plus Sign) IF the certificate is for a **Specific Product Performance**.
-  - Examples: Compostable (EN 13432), Recyclable (ISO 14021), Migration Test, Food Grade, 10/2011, Declaration of Compliance.
-
-**Product Category Column (The Description):**
-- EXTRACT the detailed product description here.
-- Examples: "Aqueous Coated Paper Cup", "Blanks of bio coated paper", "Disposable kraft paper cups", "PET Bottles".
-- Do NOT put generic terms like "Paper" or "Plastic". Put the full product string from the certificate.
+- Output "!" (Exclamation Mark) IF:
+  - Factory/Management System Certs: BRC, BRCGS, ISO 9001, ISO 22000, ISO 45001, ISO 14001, GMP, FSC, GRS, FSSC 22000.
+  - **Declaration of Compliance (DoC)** - Per client instruction, this is GENERAL.
+  - **Migration Test Reports** - Per client instruction, this is GENERAL.
+- Output "+" (Plus Sign) IF:
+  - Specific Product Performance Certs: Compostable (EN 13432), Recyclable (ISO 14021), Food Grade with 10/2011.
 
 **Measure Column (The Standard Mapping):**
+- IF "Declaration of Compliance" OR "Migration Report" OR "1935/2004" -> Output: "Regulation (EC) No 1935/2004"
 - IF ISO 22000 OR BRC OR BRCGS OR ISO 9001 OR FSSC 22000 -> Output: "(EC) No 2023/2006"
 - IF Compostable (DIN CERTCO / TUV / EN 13432) -> Output: "EN 13432 (Compostable)"
 - IF Recyclable (ISO 14021) -> Output: "ISO 14021 (Recyclable)"
 - IF FSC -> Output: "FSC"
 - IF 10/2011 -> Output: "Commission Regulation (EU) No 10/2011"
-- IF 1935/2004 -> Output: "Regulation (EC) No 1935/2004"
-- IF Migration Test (no specific reg) -> Output: "Migration Test"
+
+**Product Category Column (The Description):**
+- EXTRACT the detailed product description here.
+- Examples: "Aqueous Coated Paper Cup", "Blanks of bio coated paper", "Disposable kraft paper cups", "PET Bottles".
+- Do NOT put generic terms like "Paper" or "Plastic". Put the full product string from the certificate.
 
 **Certification Column:** The document type or certifying body.
 - Examples: "BRCGS", "ISO 9001", "ISO 22000", "FSSC 22000", "DIN CERTCO", "TUV", "Migration Test Report", "Declaration of Compliance", "FSC Cert"
