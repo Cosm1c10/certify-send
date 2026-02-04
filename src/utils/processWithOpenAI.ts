@@ -1,5 +1,35 @@
 const OPENAI_API_KEY = import.meta.env.VITE_OPENAI_API_KEY;
 
+/**
+ * Robust JSON extraction from AI response
+ * Handles cases where AI outputs conversational text before/after JSON
+ */
+function extractJSON(text: string): any {
+  // First, clean markdown code blocks
+  const cleaned = text
+    .replace(/```json\n?/g, '')
+    .replace(/```\n?/g, '')
+    .trim();
+
+  try {
+    // Attempt 1: Direct parse of cleaned text
+    return JSON.parse(cleaned);
+  } catch (e) {
+    // Attempt 2: Extract JSON object from wrapper text
+    const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      try {
+        return JSON.parse(jsonMatch[0]);
+      } catch (e2) {
+        console.error('Failed to parse extracted JSON:', e2);
+        throw new Error('Invalid JSON format in AI response');
+      }
+    }
+    console.error('No JSON found in response:', cleaned.substring(0, 200));
+    throw new Error('No JSON found in AI response');
+  }
+}
+
 interface CertificateExtractionResult {
   supplier_name: string;
   certificate_number: string;
@@ -23,62 +53,48 @@ export async function processWithOpenAI(base64Image: string, filename?: string, 
   const systemPrompt = `
 You are a Compliance Data Extraction Engine.
 Goal: Extract structured data for the Client Master File.
+CRITICAL: OUTPUT ONLY RAW JSON. NO MARKDOWN. NO CONVERSATIONAL TEXT. NO EXPLANATIONS.
 
-### 1. CRITICAL RULES
-
-**MULTI-LANGUAGE DOCUMENT HANDLING:**
-- If a document contains multiple versions of the SAME certificate (e.g., Page 1 Chinese, Page 2 English translation), treat them as a **SINGLE** record.
-- Consolidate the information into ONE JSON entry.
-- **DO NOT** output duplicate rows for translated versions of the same certificate.
+### 1. DOCUMENT HANDLING RULES
+- **Standard Certificates:** Extract normally.
+- **Business Licenses / Operating Permits:** Treat as valid documents.
+  - Certification: "Business License" or "Operating Permit"
+  - Measure: "National Regulation"
+  - Scope: "!"
+- **Multi-Language Documents:** If same certificate appears in multiple languages (e.g., Chinese + English), merge into ONE record.
 
 ### 2. CLASSIFICATION RULES
 
-**Scope Column (The Symbol):**
-- Output "!" (Exclamation Mark) IF:
-  - Factory/Management System Certs: BRC, BRCGS, ISO 9001, ISO 22000, ISO 45001, ISO 14001, GMP, FSC, GRS, FSSC 22000.
-  - **Declaration of Compliance (DoC)** - Per client instruction, this is GENERAL.
-  - **Migration Test Reports** - Per client instruction, this is GENERAL.
-- Output "+" (Plus Sign) IF:
-  - Specific Product Performance Certs: Compostable (EN 13432), Recyclable (ISO 14021), Food Grade with 10/2011.
+**Scope Column:**
+- "!" (General) for: Factory Certs, Business Licenses, DoC, Migration Reports, ISO, BRC, FSC.
+- "+" (Specific) for: Product Certs (Compostable EN 13432, Recyclable ISO 14021, Food Grade 10/2011).
 
-**Measure Column (The Standard Mapping):**
-- IF "Declaration of Compliance" OR "Migration Report" OR "1935/2004" -> Output: "Regulation (EC) No 1935/2004"
-- IF ISO 22000 OR BRC OR BRCGS OR ISO 9001 OR FSSC 22000 -> Output: "(EC) No 2023/2006"
-- IF Compostable (DIN CERTCO / TUV / EN 13432) -> Output: "EN 13432 (Compostable)"
-- IF Recyclable (ISO 14021) -> Output: "ISO 14021 (Recyclable)"
-- IF FSC -> Output: "FSC"
-- IF 10/2011 -> Output: "Commission Regulation (EU) No 10/2011"
+**Measure Column:**
+- DoC / Migration / 1935/2004 -> "Regulation (EC) No 1935/2004"
+- ISO 22000 / BRC / BRCGS / ISO 9001 / FSSC 22000 -> "(EC) No 2023/2006"
+- Compostable (DIN CERTCO / TUV / EN 13432) -> "EN 13432 (Compostable)"
+- Recyclable (ISO 14021) -> "ISO 14021 (Recyclable)"
+- FSC -> "FSC"
+- 10/2011 -> "Commission Regulation (EU) No 10/2011"
+- Business License -> "National Regulation"
 
-**Product Category Column (The Description):**
-- EXTRACT the detailed product description here.
-- Examples: "Aqueous Coated Paper Cup", "Blanks of bio coated paper", "Disposable kraft paper cups", "PET Bottles".
-- Do NOT put generic terms like "Paper" or "Plastic". Put the full product string from the certificate.
+**Product Category:** Full description from cert (e.g., "Aqueous Coated Paper Cup", "PET Bottles").
 
-**Certification Column:** The document type or certifying body.
-- Examples: "BRCGS", "ISO 9001", "ISO 22000", "FSSC 22000", "DIN CERTCO", "TUV", "Migration Test Report", "Declaration of Compliance", "FSC Cert"
+**Supplier Name:** Normalize (remove "San. Ve Tic. A.Ş.", "Co., Ltd", etc.).
 
-**Supplier Name:** Normalize to simple name.
-- "Safira Amb.", "SAFİRA AMBALAJ" -> "Safira Ambalaj"
-- "Huhtamaki Turkey" -> "Huhtamaki"
-- Remove legal suffixes: "San. Ve Tic. A.Ş.", "Co., Ltd", "Ltd. Şti."
+**Country:** "Istanbul"/"Türkiye" -> "Turkey", "Changsha" -> "China".
 
-**Country:** Detect from address.
-- "Istanbul", "Türkiye" -> "Turkey"
-- "China", "Changsha" -> "China"
+**Dates:** DD.MM.YYYY format -> YYYY-MM-DD (e.g., "11.03.2019" = "2019-03-11").
 
-**Certificate Number:** Extract from "Report No", "Certificate No", "Registration No".
-
-**Dates (YYYY-MM-DD):** "11.03.2019" = March 11, 2019 (DD.MM.YYYY format)
-
-### 2. OUTPUT JSON FORMAT
+### 3. OUTPUT JSON (RAW, NO WRAPPER)
 {
   "supplier_name": "string",
   "certificate_number": "string",
   "country": "string",
   "scope": "! or +",
-  "measure": "string (Mapped Regulation)",
-  "certification": "string (Document Type)",
-  "product_category": "string (Product Description)",
+  "measure": "string",
+  "certification": "string",
+  "product_category": "string",
   "date_issued": "YYYY-MM-DD",
   "date_expired": "YYYY-MM-DD or null"
 }
@@ -143,17 +159,15 @@ Goal: Extract structured data for the Client Master File.
   }
 
   const data = await response.json();
-  const content = data.choices[0]?.message?.content;
+  const rawContent = data.choices[0]?.message?.content;
 
-  if (!content) {
+  if (!rawContent) {
     throw new Error('No response from OpenAI');
   }
 
-  // Parse the JSON response, removing potential markdown code blocks
-  const cleanedContent = content
-    .replace(/```json\n?/g, '')
-    .replace(/```\n?/g, '')
-    .trim();
+  // Debug log for troubleshooting
+  console.log('Raw AI Response (first 500 chars):', rawContent.substring(0, 500));
 
-  return JSON.parse(cleanedContent);
+  // Parse the JSON response using robust extraction
+  return extractJSON(rawContent);
 }
