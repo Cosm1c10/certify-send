@@ -2,6 +2,35 @@ import ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
 import { CertificateData } from '@/types/certificate';
 
+/**
+ * Apply the 3-Year Rule for missing expiry dates
+ * If date_expired is null/empty but date_issued exists, set expiry = issued + 3 years
+ */
+function applyThreeYearRule(issueDate: string, expiryDate: string | null | undefined): string {
+  // If expiry date exists and is valid, use it
+  if (expiryDate && expiryDate !== 'Not Found' && expiryDate !== '') {
+    return expiryDate;
+  }
+
+  // If no issue date, we can't calculate
+  if (!issueDate || issueDate === 'Not Found' || issueDate === '') {
+    return '';
+  }
+
+  // Apply 3-year rule
+  const issued = new Date(issueDate);
+  if (isNaN(issued.getTime())) {
+    return '';
+  }
+
+  const calculatedExpiry = new Date(issued);
+  calculatedExpiry.setFullYear(calculatedExpiry.getFullYear() + 3);
+  return calculatedExpiry.toISOString().split('T')[0];
+}
+
+/**
+ * Calculate days until expiry
+ */
 function calculateDaysToExpiry(expiryDate: string): number | null {
   if (!expiryDate || expiryDate === 'Not Found' || expiryDate === '') {
     return null;
@@ -17,24 +46,36 @@ function calculateDaysToExpiry(expiryDate: string): number | null {
   expiry.setHours(0, 0, 0, 0);
 
   const diffTime = expiry.getTime() - today.getTime();
-  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
-  return diffDays;
+  return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 }
 
-// Client terminology for status
-function getClientStatus(daysToExpiry: number | null): string {
+/**
+ * Determine status based on expiry date
+ * If expiry < today -> "Expired", else "Up to date"
+ */
+function getStatus(daysToExpiry: number | null): string {
   if (daysToExpiry === null) {
     return 'Unknown';
   }
+  return daysToExpiry < 0 ? 'Expired' : 'Up to date';
+}
 
-  if (daysToExpiry < 0) {
-    return 'Expired';
-  } else if (daysToExpiry >= 0 && daysToExpiry < 30) {
-    return 'Expiring Soon';
-  } else {
-    return 'Up to date';
+/**
+ * Generate deduplication key
+ * Priority: Certificate Number (if exists), otherwise Supplier + Measure + Scope
+ */
+function getDeduplicationKey(cert: CertificateData): string {
+  // If certificate number exists and is valid, use it as the unique key
+  const certNumber = (cert.certificateNumber || '').trim();
+  if (certNumber && certNumber !== 'Not Found' && certNumber !== '-') {
+    return `cert:${certNumber.toLowerCase()}`;
   }
+
+  // Fallback: Supplier Name + Measure + Scope
+  const supplier = (cert.supplierName || '').toLowerCase().trim();
+  const measure = (cert.measure || cert.ecRegulation || '').toLowerCase().trim();
+  const scope = (cert.scope || cert.product || '').toLowerCase().trim();
+  return `combo:${supplier}|${measure}|${scope}`;
 }
 
 export const exportToExcel = async (certificates: CertificateData[]) => {
@@ -44,13 +85,10 @@ export const exportToExcel = async (certificates: CertificateData[]) => {
 
   const worksheet = workbook.addWorksheet('Certificates');
 
-  // STEP 1: Deduplicate by certificate_number (keep first occurrence)
+  // STEP 1: Deduplicate by Supplier Name + Measure + Scope (keep first occurrence)
   const seen = new Set<string>();
   const uniqueCertificates = certificates.filter((cert) => {
-    // Use certificate_number as unique key, fallback to fileName + supplierName
-    const key = cert.certificateNumber
-      ? cert.certificateNumber
-      : `${cert.fileName}-${cert.supplierName}`;
+    const key = getDeduplicationKey(cert);
 
     if (seen.has(key)) {
       console.log(`Duplicate skipped: ${key}`);
@@ -60,32 +98,36 @@ export const exportToExcel = async (certificates: CertificateData[]) => {
     return true;
   });
 
-  // STEP 2: Sort with primary (supplier_name) and secondary (ec_regulation) keys
+  // STEP 2: Sort by supplier_name (A-Z), then by measure (A-Z)
   const sortedCertificates = [...uniqueCertificates].sort((a, b) => {
-    // Primary sort: supplier_name (A-Z)
     const nameA = (a.supplierName || '').toLowerCase();
     const nameB = (b.supplierName || '').toLowerCase();
     const nameCompare = nameA.localeCompare(nameB);
 
     if (nameCompare !== 0) return nameCompare;
 
-    // Secondary sort: ec_regulation (A-Z)
-    const regA = (a.ecRegulation || '').toLowerCase();
-    const regB = (b.ecRegulation || '').toLowerCase();
-    return regA.localeCompare(regB);
+    const measureA = (a.measure || a.ecRegulation || '').toLowerCase();
+    const measureB = (b.measure || b.ecRegulation || '').toLowerCase();
+    return measureA.localeCompare(measureB);
   });
 
-  // Define columns with headers and widths (matching client's Master File)
+  // Define the 15 columns matching client's Master File structure
   worksheet.columns = [
+    { header: 'Supplier Account', key: 'supplierAccount', width: 18 },
     { header: 'Supplier Name', key: 'supplierName', width: 30 },
-    { header: 'Certificate / Report No', key: 'certificateNumber', width: 22 },
     { header: 'Country', key: 'country', width: 15 },
-    { header: 'EC Regulation Measure', key: 'ecRegulation', width: 40 },
-    { header: 'Certification', key: 'certification', width: 18 },
-    { header: 'Issued', key: 'dateIssued', width: 12 },
-    { header: 'Date of Expiry', key: 'dateExpired', width: 14 },
-    { header: 'Status', key: 'certStatus', width: 14 },
-    { header: 'Days to Expire', key: 'daysToExpiry', width: 14 },
+    { header: 'Scope', key: 'scope', width: 35 },
+    { header: 'Measure', key: 'measure', width: 40 },
+    { header: 'Certification', key: 'certification', width: 22 },
+    { header: 'Product Category', key: 'productCategory', width: 18 },
+    { header: 'Status', key: 'status', width: 14 },
+    { header: 'Issued', key: 'issued', width: 12 },
+    { header: 'Date of Expiry', key: 'dateOfExpiry', width: 14 },
+    { header: 'Days to Expire', key: 'daysToExpire', width: 14 },
+    { header: 'Contact person & Email', key: 'contactEmail', width: 28 },
+    { header: 'Date Request sent', key: 'dateRequestSent', width: 18 },
+    { header: 'Date Received', key: 'dateReceived', width: 14 },
+    { header: 'Comments', key: 'comments', width: 25 },
   ];
 
   // Style the header row
@@ -99,21 +141,36 @@ export const exportToExcel = async (certificates: CertificateData[]) => {
   headerRow.alignment = { horizontal: 'center', vertical: 'middle' };
   headerRow.height = 25;
 
-  // Add data rows (using sorted certificates for supplier grouping)
+  // Today's date for "Date Received" column
+  const todayStr = new Date().toISOString().split('T')[0];
+
+  // Add data rows
   sortedCertificates.forEach((cert) => {
-    const daysToExpiry = calculateDaysToExpiry(cert.expiryDate);
-    const status = getClientStatus(daysToExpiry);
+    // Apply 3-year rule to get effective expiry date
+    const effectiveExpiryDate = applyThreeYearRule(
+      cert.issueDate,
+      cert.expiryDate
+    );
+
+    const daysToExpiry = calculateDaysToExpiry(effectiveExpiryDate);
+    const status = getStatus(daysToExpiry);
 
     worksheet.addRow({
-      supplierName: cert.supplierName || '',
-      certificateNumber: cert.certificateNumber || '',
-      country: cert.country || '',
-      ecRegulation: cert.ecRegulation || '',
-      certification: cert.certification || '',
-      dateIssued: cert.issueDate || '',
-      dateExpired: cert.expiryDate || '',
-      certStatus: status,
-      daysToExpiry: daysToExpiry !== null ? daysToExpiry : '',
+      supplierAccount: '',                                           // Column 1: Empty
+      supplierName: cert.supplierName || '',                         // Column 2: Supplier Name
+      country: cert.country || '',                                   // Column 3: Country
+      scope: cert.scope || cert.product || '',                       // Column 4: Scope (fallback to product)
+      measure: cert.measure || cert.ecRegulation || '',              // Column 5: Measure (fallback to ecRegulation)
+      certification: cert.certification || '',                        // Column 6: Certification
+      productCategory: cert.productCategory || '',                   // Column 7: Product Category
+      status: status,                                                // Column 8: Status
+      issued: cert.issueDate || '',                                  // Column 9: Issued
+      dateOfExpiry: effectiveExpiryDate,                            // Column 10: Date of Expiry (with 3-year rule)
+      daysToExpire: daysToExpiry !== null ? daysToExpiry : '',      // Column 11: Days to Expire
+      contactEmail: '',                                              // Column 12: Empty
+      dateRequestSent: '',                                           // Column 13: Empty
+      dateReceived: todayStr,                                        // Column 14: Today's date
+      comments: '',                                                  // Column 15: Empty
     });
   });
 
@@ -121,11 +178,11 @@ export const exportToExcel = async (certificates: CertificateData[]) => {
   worksheet.eachRow((row, rowNumber) => {
     if (rowNumber === 1) return; // Skip header
 
-    const statusCell = row.getCell('certStatus');
-    const daysCell = row.getCell('daysToExpiry');
+    const statusCell = row.getCell('status');
+    const daysCell = row.getCell('daysToExpire');
     const status = statusCell.value as string;
 
-    // Style the entire row based on status
+    // Apply borders to all cells
     row.eachCell((cell) => {
       cell.border = {
         top: { style: 'thin', color: { argb: 'FFD9D9D9' } },
@@ -135,7 +192,7 @@ export const exportToExcel = async (certificates: CertificateData[]) => {
       };
     });
 
-    // Apply status-specific styling
+    // Status-specific styling
     if (status === 'Expired') {
       // Red background for expired
       statusCell.fill = {
@@ -151,21 +208,6 @@ export const exportToExcel = async (certificates: CertificateData[]) => {
         fgColor: { argb: 'FFFFCCCC' },
       };
       daysCell.font = { bold: true, color: { argb: 'FF9C0006' } };
-    } else if (status === 'Expiring Soon') {
-      // Orange background for expiring soon
-      statusCell.fill = {
-        type: 'pattern',
-        pattern: 'solid',
-        fgColor: { argb: 'FFFFEB9C' }, // Light orange
-      };
-      statusCell.font = { bold: true, color: { argb: 'FF9C5700' } }; // Dark orange text
-
-      daysCell.fill = {
-        type: 'pattern',
-        pattern: 'solid',
-        fgColor: { argb: 'FFFFEB9C' },
-      };
-      daysCell.font = { bold: true, color: { argb: 'FF9C5700' } };
     } else if (status === 'Up to date') {
       // Green background for valid
       statusCell.fill = {
@@ -181,17 +223,24 @@ export const exportToExcel = async (certificates: CertificateData[]) => {
         fgColor: { argb: 'FFC6EFCE' },
       };
       daysCell.font = { bold: true, color: { argb: 'FF006100' } };
+    } else {
+      // Gray for unknown
+      statusCell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFE0E0E0' },
+      };
+      statusCell.font = { color: { argb: 'FF666666' } };
     }
   });
 
-  // Add alternating row colors for better readability
-  // Column indices: 1=Supplier, 2=CertNo, 3=Country, 4=ECReg, 5=Cert, 6=Issued, 7=Expiry, 8=Status, 9=Days
+  // Add alternating row colors for readability (skip status/days columns 8 and 11)
   worksheet.eachRow((row, rowNumber) => {
     if (rowNumber === 1) return;
     if (rowNumber % 2 === 0) {
       row.eachCell((cell, colNumber) => {
-        // Don't override status/days cells (columns 8 and 9)
-        if (colNumber !== 8 && colNumber !== 9) {
+        // Don't override status (col 8) and days to expire (col 11) cells
+        if (colNumber !== 8 && colNumber !== 11) {
           if (!cell.fill || (cell.fill as ExcelJS.FillPattern).pattern !== 'solid') {
             cell.fill = {
               type: 'pattern',

@@ -7,15 +7,17 @@ import { FileWithBase64 } from '@/components/DropZone';
 interface EdgeFunctionResponse {
   supplier_name: string;
   certificate_number: string;
-  country?: string;       // Legacy field
-  region?: string;        // New field (v2)
-  product_category?: string;
-  ec_regulation: string;
+  country?: string;
+  scope?: string;           // Product description
+  measure?: string;         // Regulation reference
   certification: string;
+  product_category?: string;
   date_issued: string;
-  date_expired?: string;  // Legacy field
-  date_expiry?: string;   // New field (v2)
-  status?: string;        // New field (v2)
+  date_expired?: string | null;
+  // Legacy field aliases
+  ec_regulation?: string;   // Alias for measure
+  region?: string;          // Alias for country
+  date_expiry?: string;     // Alias for date_expired
 }
 
 interface ProcessingProgress {
@@ -79,23 +81,28 @@ export const useCertificates = () => {
       data = responseData;
     }
 
-    // Handle both v1 (country, date_expired) and v2 (region, date_expiry) field names
-    const expiryDate = data.date_expiry || data.date_expired || '';
-    const country = data.region || data.country || '';
+    // Handle field aliases for backwards compatibility
+    const expiryDate = data.date_expired || data.date_expiry || '';
+    const country = data.country || data.region || '';
+    const measure = data.measure || data.ec_regulation || '';
 
     return {
       id: crypto.randomUUID(),
       fileName: file.name,
       supplierName: data.supplier_name || '',
       certificateNumber: data.certificate_number || '',
-      product: data.product_category || '',
       country: country,
-      ecRegulation: data.ec_regulation || '',
+      scope: data.scope || '',                    // Product description
+      measure: measure,                            // Regulation reference
       certification: data.certification || '',
-      certType: data.certification || '',
+      productCategory: data.product_category || '',
       issueDate: data.date_issued || '',
       expiryDate: expiryDate,
       status: determineStatus(expiryDate),
+      // Legacy fields for backwards compatibility
+      product: data.scope || data.product_category || '',
+      ecRegulation: measure,
+      certType: data.certification || '',
     };
   };
 

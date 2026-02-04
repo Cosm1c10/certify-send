@@ -50,49 +50,62 @@ serve(async (req) => {
     const openai = new OpenAI({ apiKey: openaiApiKey });
 
     const systemPrompt = `
-You are a high-precision Compliance Data Extraction Engine.
-Your goal is to extract structured data from certification documents (PDF/Images) for a master database.
+You are a Compliance Data Extraction Engine.
+Goal: Extract structured data for the Client Master File.
 
-### CRITICAL RULES FOR EXTRACTION:
+### 1. EXTRACTION RULES
 
-1. **SUPPLIER NAME NORMALIZATION (Must be Exact)**
-   - **Safira Rule:** If the document mentions "Safira Amb.", "SAFİRA AMBALAJ", "Safira Ambalaj San. Ve Tic." -> Output ONLY: "Safira Ambalaj".
-   - **Huhtamaki Rule:** If the document mentions "Huhtamaki", "Huhtamaki Turkey" -> Output ONLY: "Huhtamaki".
-   - **General Rule:** Remove legal suffixes like "San. Ve Tic. A.Ş.", "Co., Ltd", "Ltd. Şti.", "Pvt. Ltd". Output the clean company name.
+**Supplier Name:** Normalize company names.
+- "Safira Amb.", "SAFİRA AMBALAJ", "Safira Ambalaj San. Ve Tic." -> "Safira Ambalaj"
+- "Huhtamaki Turkey", "Huhtamaki" -> "Huhtamaki"
+- Remove legal suffixes: "San. Ve Tic. A.Ş.", "Co., Ltd", "Ltd. Şti.", "Pvt. Ltd"
 
-2. **COUNTRY DETECTION**
-   - Scan the address block in the header/footer.
-   - If "Istanbul", "Turkey", "Türkiye" found -> Output: "Turkey".
-   - If "China", "Changsha", "Hunan" found -> Output: "China".
-   - If "Dublin", "Ireland" found -> Output: "Ireland".
+**Country:** Detect from address block.
+- "Istanbul", "Turkey", "Türkiye" -> "Turkey"
+- "China", "Changsha", "Hunan" -> "China"
+- "Dublin", "Ireland" -> "Ireland"
+- "Germany", "Deutschland" -> "Germany"
+- "Poland", "Polska" -> "Poland"
 
-3. **EC REGULATION / MEASURE (Strict Search)**
-   - Search the *entire* text for these specific regulation numbers.
-   - If "10/2011" is found (even inside "EU No 10/2011") -> Output: "Commission Regulation (EU) No 10/2011".
-   - If "2023/2006" is found -> Output: "Commission Regulation (EC) No 2023/2006".
-   - If "1935/2004" is found -> Output: "Regulation (EC) No 1935/2004".
-   - If "94/62/EC" is found -> Output: "Directive 94/62/EC".
-   - **Fallback:** Only use "Migration Test" if absolutely NO regulation numbers are present.
+**Scope:** Short summary of the product covered.
+- Examples: "Aqueous Coated Paper Cup", "PET Bottles", "Food Contact Materials", "Single Wall Cup"
 
-4. **CERTIFICATE / REPORT NUMBER**
-   - Look for labels: "Report No", "Rapor No", "Certificate No", "Registration No".
-   - Capture IDs like: "FS10068846", "3193", "7P1350".
+**Measure (CRITICAL - DO NOT DEFAULT TO "General Compliance"):**
+- ALWAYS look for specific standards. "General Compliance" is ONLY acceptable if NO standard is found.
+- If "EN 13432" or "DIN CERTCO" found -> "EN 13432 (Compostable)"
+- If "10/2011" found -> "Commission Regulation (EU) No 10/2011"
+- If "2023/2006" found -> "Commission Regulation (EC) No 2023/2006"
+- If "1935/2004" found -> "Regulation (EC) No 1935/2004"
+- If "94/62/EC" found -> "Directive 94/62/EC"
+- If "ISO 14021" found -> "ISO 14021 (Recyclable)"
+- If "BRC" or "BRCGS" found -> "BRCGS Global Standard"
+- If "FSC" found -> "FSC Standard"
+- If migration/food contact test -> "Migration Test"
+- ONLY use "General Compliance" as absolute last resort when NO standard numbers exist.
 
-5. **DATES (Format: YYYY-MM-DD)**
-   - Extract "Issue Date" (or "Tarih").
-   - Extract "Expiry Date" (or "Valid until").
-   - Note: "Tarih: 11.03.2019" is March 11, 2019.
+**Certification:** The document type or certifying body.
+- Examples: "BRCGS", "ISO 9001", "ISO 22000", "FSSC 22000", "DIN CERTCO", "Migration Test Report", "Declaration of Compliance", "Recyclability Certificate", "FSC Cert", "Halal", "Kosher"
 
-### OUTPUT JSON FORMAT:
+**Product Category:** Material classification.
+- Options: "Paper", "Rigid Plastics", "Flexible Plastics", "Chemicals", "Metal", "Glass", "Wood"
+
+**Certificate Number:** Extract from "Report No", "Rapor No", "Certificate No", "Registration No".
+
+**Dates (Format: YYYY-MM-DD):**
+- Extract "Issue Date" (or "Tarih") and "Expiry Date" (or "Valid until")
+- Note: "11.03.2019" = March 11, 2019 (DD.MM.YYYY format)
+
+### 2. OUTPUT JSON FORMAT
 {
-  "supplier_name": "string (Normalized company name)",
-  "certificate_number": "string (Report No / Cert ID)",
-  "country": "string (Country of origin)",
-  "ec_regulation": "string (Full regulation name or 'Migration Test')",
-  "certification": "string (e.g., 'Migration Test', 'BRCGS', 'ISO 22000')",
+  "supplier_name": "string",
+  "certificate_number": "string",
+  "country": "string",
+  "scope": "string",
+  "measure": "string",
+  "certification": "string",
+  "product_category": "string",
   "date_issued": "YYYY-MM-DD",
-  "date_expired": "YYYY-MM-DD",
-  "status": "string (Valid/Expired)"
+  "date_expired": "YYYY-MM-DD or null"
 }
 `;
 
