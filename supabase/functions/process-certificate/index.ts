@@ -21,6 +21,7 @@ const corsHeaders = {
 // =============================================================================
 const VALID_MEASURES = [
   "EU Regulation 2016/425",
+  "EU MDR 2017/745",           // Medical Device Regulation (gloves, medical devices)
   "(EC) No 2023/2006",
   "(EC) No 1935/2004",
   "(EC) No 10/2011",
@@ -120,7 +121,12 @@ function inferMeasureFromCert(certification?: string): string {
 
   const cert = certification.toLowerCase();
 
-  // Gloves
+  // Medical Device Regulation (MDR)
+  if (cert.includes("2017/745") || cert.includes("mdr") || cert.includes("medical device")) {
+    return "EU MDR 2017/745";
+  }
+
+  // Gloves (PPE Regulation)
   if (cert.includes("en 455") || cert.includes("en 374") || cert.includes("en 420") || cert.includes("en 388")) {
     return "EU Regulation 2016/425";
   }
@@ -323,6 +329,42 @@ function calculateExpiry(dateIssued: string): string {
 }
 
 // =============================================================================
+// 7b. EXTRACT YEAR FROM CERTIFICATION STRING
+// Handles: "EN 455-1:2020", "ISO 9001:2015", "EN 455-1:2020+A1:2022"
+// =============================================================================
+function extractYearFromCertification(certification: string): string | null {
+  if (!certification) return null;
+
+  // Match year patterns like :2020, :2015, +A1:2022, etc.
+  const yearPattern = /[:\-+](20[12]\d)\b/g;
+  const years: number[] = [];
+
+  let match: RegExpExecArray | null;
+  while ((match = yearPattern.exec(certification)) !== null) {
+    years.push(parseInt(match[1], 10));
+  }
+
+  // Return the LATEST year found (most recent revision)
+  if (years.length > 0) {
+    const latestYear = Math.max(...years);
+    return `${latestYear}-01-01`;  // Use Jan 1st of that year
+  }
+
+  return null;
+}
+
+// =============================================================================
+// 7c. GET TODAY'S DATE (for DoC default)
+// =============================================================================
+function getTodayISO(): string {
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = String(today.getMonth() + 1).padStart(2, "0");
+  const day = String(today.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+// =============================================================================
 // 8. DETECT CERTIFICATE TYPE FROM RAW TEXT (TEXT-FIRST APPROACH)
 // =============================================================================
 function detectCertTypeFromText(fullText: string): { scope: string; measure: string; certification: string } | null {
@@ -331,6 +373,13 @@ function detectCertTypeFromText(fullText: string): { scope: string; measure: str
   // =========================================================================
   // PRIORITY 1: GLOVES (Highest Priority)
   // =========================================================================
+  // First check for EU MDR 2017/745 (Medical Device Regulation - higher priority for medical gloves)
+  if (t.includes("2017/745") || t.includes("mdr") || t.includes("medical device regulation")) {
+    const certName = t.includes("en 455") ? "EN 455" : "Medical Device";
+    return { scope: "+", measure: "EU MDR 2017/745", certification: certName };
+  }
+
+  // PPE Regulation (EU) 2016/425 for non-medical gloves
   if (t.includes("en 455") || t.includes("en 374") || t.includes("en 420") || t.includes("en 388") ||
       t.includes("module b") || t.includes("cat iii") || t.includes("category iii") ||
       t.includes("2016/425") || t.includes("nitrile glove") || t.includes("examination glove")) {
@@ -457,9 +506,33 @@ function applyBusinessLogic(data: any, fullText: string): any {
     if (inferredCountry) data.country = inferredCountry;
   }
 
-  // STEP 3: Date fallback
+  // STEP 3: Date fallback (multi-source)
   if (!data.date_issued || data.date_issued === "string" || data.date_issued === "") {
-    const extractedDate = extractDateFromText(fullText);
+    // 3a: Try extracting from fullText first
+    let extractedDate = extractDateFromText(fullText);
+
+    // 3b: If no date from text, try certification field (e.g., "EN 455-1:2020")
+    if (!extractedDate && data.certification) {
+      extractedDate = extractYearFromCertification(data.certification);
+      if (extractedDate) {
+        console.log("Date extracted from certification string:", extractedDate);
+      }
+    }
+
+    // 3c: If still no date and it's a DoC/Declaration, use today's date
+    if (!extractedDate) {
+      const certLower = (data.certification || "").toLowerCase();
+      const measureLower = (data.measure || "").toLowerCase();
+      const isDoC = certLower.includes("declaration") || certLower.includes("conformity") ||
+                    certLower.includes("doc") || measureLower.includes("1935/2004") ||
+                    certLower.includes("en 455") || certLower.includes("en 374");
+
+      if (isDoC) {
+        extractedDate = getTodayISO();
+        console.log("DoC detected without date - using today's date:", extractedDate);
+      }
+    }
+
     if (extractedDate) data.date_issued = extractedDate;
   }
 
