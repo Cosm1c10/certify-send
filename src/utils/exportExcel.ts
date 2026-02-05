@@ -62,20 +62,23 @@ function getStatus(daysToExpiry: number | null): string {
 
 /**
  * Generate deduplication key
- * Priority: Certificate Number (if exists), otherwise Supplier + Measure + Scope
+ * ALWAYS includes: Certificate Number + Certification + Measure
+ * This ensures different standards with same cert number are NOT treated as duplicates
  */
 function getDeduplicationKey(cert: CertificateData): string {
-  // If certificate number exists and is valid, use it as the unique key
-  const certNumber = (cert.certificateNumber || '').trim();
-  if (certNumber && certNumber !== 'Not Found' && certNumber !== '-') {
-    return `cert:${certNumber.toLowerCase()}`;
+  const certNumber = (cert.certificateNumber || '').trim().toLowerCase();
+  const certification = (cert.certification || '').trim().toLowerCase();
+  const measure = (cert.measure || cert.ecRegulation || '').trim().toLowerCase();
+  const supplier = (cert.supplierName || '').trim().toLowerCase();
+
+  // ALWAYS include certification and measure in the key to prevent false dedup
+  // e.g., same cert number but different standards = different rows
+  if (certNumber && certNumber !== 'not found' && certNumber !== '-') {
+    return `cert:${certNumber}|${certification}|${measure}`;
   }
 
-  // Fallback: Supplier Name + Measure + Scope
-  const supplier = (cert.supplierName || '').toLowerCase().trim();
-  const measure = (cert.measure || cert.ecRegulation || '').toLowerCase().trim();
-  const scope = (cert.scope || cert.product || '').toLowerCase().trim();
-  return `combo:${supplier}|${measure}|${scope}`;
+  // Fallback: Supplier Name + Measure + Certification
+  return `combo:${supplier}|${measure}|${certification}`;
 }
 
 export const exportToExcel = async (certificates: CertificateData[]) => {
