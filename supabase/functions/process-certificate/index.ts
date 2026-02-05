@@ -59,8 +59,15 @@ function sanitize(val: any, defaultVal: string = ""): string {
   const str = String(val).trim();
   const lower = str.toLowerCase();
 
+  // CRITICAL: Explicit "string" check (JSON schema leak)
+  if (lower === "string" || str === "String") {
+    console.warn("BLOCKED: JSON schema leak detected - 'string' value");
+    return defaultVal;
+  }
+
   // Block garbage values
-  if (GARBAGE_VALUES.some(g => lower === g || lower.includes(g))) {
+  if (GARBAGE_VALUES.some(g => lower === g)) {
+    console.warn("BLOCKED: Garbage value detected -", str);
     return defaultVal;
   }
 
@@ -73,10 +80,10 @@ function sanitize(val: any, defaultVal: string = ""): string {
 }
 
 // =============================================================================
-// 4. VALIDATE MEASURE (Must be from whitelist or short)
+// 4. VALIDATE MEASURE (Must be from whitelist - STRICT)
 // =============================================================================
-function validateMeasure(measure: string): string {
-  if (!measure) return "National Regulation";
+function validateMeasure(measure: string, certification?: string): string {
+  if (!measure || measure.toLowerCase() === "string") return inferMeasureFromCert(certification);
 
   const lower = measure.toLowerCase();
 
@@ -87,20 +94,78 @@ function validateMeasure(measure: string): string {
     }
   }
 
-  // If measure is too long (>50 chars), it's probably a description - REJECT
-  if (measure.length > 50) {
-    console.warn("Measure rejected (too long):", measure.substring(0, 50) + "...");
-    return "National Regulation";
+  // If measure is too long (>40 chars), it's a description - FORCE LOOKUP
+  if (measure.length > 40) {
+    console.warn("Measure rejected (too long) - forcing lookup:", measure.substring(0, 40) + "...");
+    return inferMeasureFromCert(certification);
   }
 
-  // If it contains suspicious words, reject
-  const suspiciousWords = ["manufacturing", "selling", "production", "products", "services", "company", "limited"];
+  // If it contains suspicious words, FORCE LOOKUP
+  const suspiciousWords = ["manufacturing", "selling", "production", "products", "services", "company", "limited", "trading", "industry"];
   if (suspiciousWords.some(w => lower.includes(w))) {
-    console.warn("Measure rejected (looks like description):", measure);
-    return "National Regulation";
+    console.warn("Measure rejected (description) - forcing lookup:", measure);
+    return inferMeasureFromCert(certification);
   }
 
-  return measure;
+  // Not in whitelist and not a description - still force lookup
+  console.warn("Measure not in whitelist - forcing lookup:", measure);
+  return inferMeasureFromCert(certification);
+}
+
+// =============================================================================
+// 4b. INFER MEASURE FROM CERTIFICATION (Fallback)
+// =============================================================================
+function inferMeasureFromCert(certification?: string): string {
+  if (!certification) return "National Regulation";
+
+  const cert = certification.toLowerCase();
+
+  // Gloves
+  if (cert.includes("en 455") || cert.includes("en 374") || cert.includes("en 420") || cert.includes("en 388")) {
+    return "EU Regulation 2016/425";
+  }
+
+  // ISO 45001 - SAFETY (must check BEFORE 9001)
+  if (cert.includes("45001") || cert.includes("iso 45001")) {
+    return "EU Directive 89/391/EEC";
+  }
+
+  // ISO 14001 - Environmental
+  if (cert.includes("14001") || cert.includes("iso 14001")) {
+    return "EU Waste Framework Directive (2008/98/EC)";
+  }
+
+  // ISO 27001 - Information Security
+  if (cert.includes("27001") || cert.includes("iso 27001")) {
+    return "EU GDPR";
+  }
+
+  // ISO 9001 / BRC / GMP
+  if (cert.includes("9001") || cert.includes("brc") || cert.includes("22000") || cert.includes("fssc") || cert.includes("gmp")) {
+    return "(EC) No 2023/2006";
+  }
+
+  // DoC / Migration
+  if (cert.includes("declaration") || cert.includes("doc") || cert.includes("migration") || cert.includes("conformity")) {
+    return "(EC) No 1935/2004";
+  }
+
+  // FSC
+  if (cert.includes("fsc") && !cert.includes("fssc")) {
+    return "FSC";
+  }
+
+  // EN 13432
+  if (cert.includes("13432") || cert.includes("compostable")) {
+    return "EN 13432";
+  }
+
+  // EU 10/2011
+  if (cert.includes("10/2011")) {
+    return "(EC) No 10/2011";
+  }
+
+  return "National Regulation";
 }
 
 // =============================================================================
@@ -205,7 +270,9 @@ function calculateExpiry(dateIssued: string): string {
 function detectCertTypeFromText(fullText: string): { scope: string; measure: string; certification: string } | null {
   const t = fullText.toLowerCase();
 
-  // GLOVES - Highest Priority
+  // =========================================================================
+  // PRIORITY 1: GLOVES (Highest Priority)
+  // =========================================================================
   if (t.includes("en 455") || t.includes("en 374") || t.includes("en 420") || t.includes("en 388") ||
       t.includes("module b") || t.includes("cat iii") || t.includes("category iii") ||
       t.includes("2016/425") || t.includes("nitrile glove") || t.includes("examination glove")) {
@@ -213,29 +280,42 @@ function detectCertTypeFromText(fullText: string): { scope: string; measure: str
     return { scope: "+", measure: "EU Regulation 2016/425", certification: certName };
   }
 
-  // ISO 14001
-  if (t.includes("iso 14001") || t.includes("14001:")) {
-    return { scope: "!", measure: "EU Waste Framework Directive (2008/98/EC)", certification: "ISO 14001" };
-  }
-
-  // ISO 45001
-  if (t.includes("iso 45001") || t.includes("45001:")) {
+  // =========================================================================
+  // PRIORITY 2: ISO 45001 (MUST CHECK BEFORE FACTORY CERTS!)
+  // Occupational Health & Safety - NOT GMP!
+  // =========================================================================
+  if (t.includes("iso 45001") || t.includes("45001:") || t.match(/\b45001\b/)) {
+    console.log("DETECTED: ISO 45001 - Mapping to EU Directive 89/391/EEC");
     return { scope: "!", measure: "EU Directive 89/391/EEC", certification: "ISO 45001" };
   }
 
-  // ISO 27001
-  if (t.includes("iso 27001") || t.includes("27001:")) {
+  // =========================================================================
+  // PRIORITY 3: ISO 14001 (Environmental)
+  // =========================================================================
+  if (t.includes("iso 14001") || t.includes("14001:") || t.match(/\b14001\b/)) {
+    return { scope: "!", measure: "EU Waste Framework Directive (2008/98/EC)", certification: "ISO 14001" };
+  }
+
+  // =========================================================================
+  // PRIORITY 4: ISO 27001 (Information Security)
+  // =========================================================================
+  if (t.includes("iso 27001") || t.includes("27001:") || t.match(/\b27001\b/)) {
     return { scope: "!", measure: "EU GDPR", certification: "ISO 27001" };
   }
 
-  // FSC
+  // =========================================================================
+  // PRIORITY 5: FSC (Forestry - NOT FSSC!)
+  // =========================================================================
   if (t.match(/\bfsc\b/) && !t.includes("fssc")) {
     return { scope: "!", measure: "FSC", certification: "FSC" };
   }
 
-  // ISO 9001 / BRC / BRCGS / ISO 22000 / FSSC / GMP
-  if (t.includes("iso 9001") || t.includes("9001:") || t.includes("brcgs") || t.includes("brc global") ||
-      t.includes("iso 22000") || t.includes("22000:") || t.includes("fssc 22000") || t.includes("fssc22000") ||
+  // =========================================================================
+  // PRIORITY 6: ISO 9001 / BRC / BRCGS / ISO 22000 / FSSC / GMP
+  // Factory/Manufacturing certs - AFTER specific ISO checks
+  // =========================================================================
+  if (t.includes("iso 9001") || t.match(/\b9001:/) || t.includes("brcgs") || t.includes("brc global") ||
+      t.includes("iso 22000") || t.match(/\b22000:/) || t.includes("fssc 22000") || t.includes("fssc22000") ||
       t.match(/\bgmp\b/) || t.includes("good manufacturing")) {
     const certName = t.includes("brc") ? "BRC" : t.includes("fssc") ? "FSSC 22000" : t.includes("22000") ? "ISO 22000" : "ISO 9001";
     return { scope: "!", measure: "(EC) No 2023/2006", certification: certName };
@@ -315,8 +395,8 @@ function applyBusinessLogic(data: any, fullText: string): any {
     }
   }
 
-  // STEP 5: Validate measure (must be from whitelist)
-  data.measure = validateMeasure(data.measure);
+  // STEP 5: Validate measure (must be from whitelist, fallback to cert-based lookup)
+  data.measure = validateMeasure(data.measure, data.certification);
 
   // STEP 6: Ensure certificate_number for dedup
   if (!data.certificate_number || data.certificate_number === "string" || data.certificate_number === "") {
