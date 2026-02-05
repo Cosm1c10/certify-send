@@ -1,4 +1,8 @@
-// Supabase Edge Function - FINAL PRODUCTION (Sanitization + Business Logic)
+// =============================================================================
+// SUPABASE EDGE FUNCTION: process-certificate
+// Version: FINAL PRODUCTION (Feb 2026)
+// Client: Catering Disposables (Jun & Saurebh)
+// =============================================================================
 // deno-lint-ignore-file no-explicit-any
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import OpenAI from "https://deno.land/x/openai@v4.20.1/mod.ts";
@@ -11,126 +15,296 @@ declare const Deno: {
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-// 1. DATA SANITIZER (Prevents Excel Drops)
-// Converts null/undefined to "" so the row NEVER disappears.
+// =============================================================================
+// 1. SANITIZE FUNCTION (Fixes Excel Drop Bug)
+// =============================================================================
+// Converts null/undefined/"null" to empty string so Excel rows never disappear.
 function sanitize(val: any, defaultVal: string = ""): string {
-  if (val === null || val === undefined || val === "null") return defaultVal;
+  if (val === null || val === undefined || val === "null" || val === "undefined") {
+    return defaultVal;
+  }
   return String(val).trim();
 }
 
-// 2. HARD-CODED BUSINESS LOGIC (Fixes Empty Measures)
+// =============================================================================
+// 2. APPLY BUSINESS LOGIC (Jun & Saurebh's Rules - Feb 2026)
+// =============================================================================
+// This function OVERWRITES AI guesses with hard-coded regulatory mappings.
 function applyBusinessLogic(data: any): any {
   const cert = (data.certification || "").toLowerCase();
   const prod = (data.product_category || "").toLowerCase();
-  const measure = (data.measure || "").toLowerCase();
+  const supp = (data.supplier_name || "").toLowerCase();
+  const currentMeasure = (data.measure || "").toLowerCase();
 
-  // RULE A: GLOVES (The "Force" Rule)
-  if (cert.includes("en 455") || cert.includes("en 374") || cert.includes("en 420") || cert.includes("glove") || prod.includes("glove")) {
+  // -------------------------------------------------------------------------
+  // RULE C: GLOVES (Saurebh's Requirement) - HIGHEST PRIORITY
+  // -------------------------------------------------------------------------
+  // Triggers: EN 455, EN 374, EN 420, Module B, Cat III, Nitrile Gloves
+  const isGlove =
+    cert.includes("en 455") ||
+    cert.includes("en 374") ||
+    cert.includes("en 420") ||
+    cert.includes("en 388") ||
+    cert.includes("module b") ||
+    cert.includes("cat iii") ||
+    cert.includes("category iii") ||
+    cert.includes("2016/425") ||
+    prod.includes("glove") ||
+    prod.includes("nitrile") ||
+    supp.includes("intco");
+
+  if (isGlove) {
     data.scope = "+";
-    // Always overwrite Measure for gloves, even if AI guessed something else
     data.measure = "EU Regulation 2016/425";
-    if (!data.product_category || data.product_category === "Goods") data.product_category = "Gloves";
-  }
-
-  // RULE B: FACTORY CERTS (ISO 9001, BRC, FSSC)
-  else if (cert.includes("iso 9001") || cert.includes("brc") || cert.includes("iso 22000") || cert.includes("fssc")) {
-    data.scope = "!";
-    // If measure is blank or generic, force the specific Regulation
-    if (!data.measure || measure === "national regulation" || measure === "") {
-      data.measure = "(EC) No 2023/2006";
+    if (!data.product_category || data.product_category === "Goods" || data.product_category === "Unknown") {
+      data.product_category = "Gloves";
     }
+    return data;
   }
 
-  // RULE C: ISO 14001
-  else if (cert.includes("iso 14001")) {
+  // -------------------------------------------------------------------------
+  // RULE A: GENERAL (!) - Factory/Management Certificates
+  // -------------------------------------------------------------------------
+
+  // A.1: ISO 14001 (Environmental)
+  if (cert.includes("iso 14001") || cert.includes("14001")) {
     data.scope = "!";
     data.measure = "EU Waste Framework Directive (2008/98/EC)";
+    return data;
   }
 
-  // RULE D: ISO 45001
-  else if (cert.includes("iso 45001")) {
+  // A.2: ISO 45001 (Occupational Health & Safety)
+  if (cert.includes("iso 45001") || cert.includes("45001")) {
     data.scope = "!";
     data.measure = "EU Directive 89/391/EEC";
+    return data;
   }
 
-  // RULE E: DoC (Declaration of Compliance) -> Specific
-  else if (cert.includes("declaration of conformity") || cert.includes("doc")) {
-    data.scope = "+";
-    if (!data.measure) data.measure = "(EC) No 1935/2004";
+  // A.3: ISO 27001 (Information Security)
+  if (cert.includes("iso 27001") || cert.includes("27001")) {
+    data.scope = "!";
+    data.measure = "EU GDPR";
+    return data;
   }
+
+  // A.4: FSC (Forestry)
+  if (cert.includes("fsc") && !cert.includes("fssc")) {
+    data.scope = "!";
+    data.measure = "FSC";
+    return data;
+  }
+
+  // A.5: ISO 9001 / BRC / BRCGS / ISO 22000 / FSSC 22000 / GMP
+  const isFactoryCert =
+    cert.includes("iso 9001") ||
+    cert.includes("9001") ||
+    cert.includes("brc") ||
+    cert.includes("brcgs") ||
+    cert.includes("iso 22000") ||
+    cert.includes("22000") ||
+    cert.includes("fssc") ||
+    cert.includes("gmp") ||
+    cert.includes("good manufacturing");
+
+  if (isFactoryCert) {
+    data.scope = "!";
+    if (!data.measure || currentMeasure === "" || currentMeasure === "national regulation") {
+      data.measure = "(EC) No 2023/2006";
+    }
+    return data;
+  }
+
+  // -------------------------------------------------------------------------
+  // RULE B: SPECIFIC (+) - Product Compliance Certificates
+  // -------------------------------------------------------------------------
+
+  // B.1: EU 10/2011 (Plastics Regulation)
+  if (cert.includes("10/2011") || cert.includes("eu 10/2011") || cert.includes("plastic")) {
+    data.scope = "+";
+    data.measure = "(EC) No 10/2011";
+    return data;
+  }
+
+  // B.2: EN 13432 (Compostable)
+  if (cert.includes("en 13432") || cert.includes("13432") || cert.includes("compostable") || cert.includes("din certco")) {
+    data.scope = "+";
+    data.measure = "EN 13432";
+    return data;
+  }
+
+  // B.3: EN 13430 / ISO 14021 (Recyclable)
+  if (cert.includes("en 13430") || cert.includes("13430") || cert.includes("iso 14021") || cert.includes("recyclable")) {
+    data.scope = "+";
+    data.measure = "EN 13430";
+    return data;
+  }
+
+  // B.4: DoC / Migration Reports / Heavy Metal / Food Contact Tests
+  const isProductTest =
+    cert.includes("declaration of conformity") ||
+    cert.includes("doc") ||
+    cert.includes("migration") ||
+    cert.includes("heavy metal") ||
+    cert.includes("food contact") ||
+    cert.includes("1935/2004") ||
+    cert.includes("microwave") ||
+    cert.includes("dishwasher");
+
+  if (isProductTest) {
+    data.scope = "+";
+    if (!data.measure || currentMeasure === "" || currentMeasure === "national regulation") {
+      data.measure = "(EC) No 1935/2004";
+    }
+    return data;
+  }
+
+  // -------------------------------------------------------------------------
+  // DEFAULT: Business License / Unknown
+  // -------------------------------------------------------------------------
+  if (cert.includes("business license") || cert.includes("operating permit")) {
+    data.scope = "!";
+    data.measure = "National Regulation";
+    return data;
+  }
+
+  // If nothing matched, default to General
+  if (!data.scope) data.scope = "!";
+  if (!data.measure) data.measure = "National Regulation";
 
   return data;
 }
 
-// 3. ROBUST EXTRACTION (Self-Healing)
+// =============================================================================
+// 3. CALCULATE EXPIRY DATE (3-Year Rule for Test Reports)
+// =============================================================================
+function calculateExpiry(dateIssued: string | null): string {
+  if (!dateIssued) return "";
+  try {
+    const parts = dateIssued.split("-");
+    if (parts.length === 3) {
+      const year = parseInt(parts[0], 10) + 3;
+      return `${year}-${parts[1]}-${parts[2]}`;
+    }
+  } catch (e) {
+    console.warn("Could not calculate expiry:", e);
+  }
+  return "";
+}
+
+// =============================================================================
+// 4. EXTRACT JSON (Self-Healing Parser)
+// =============================================================================
 function extractJSON(text: string): any {
-  console.log("Raw AI Response:", text);
-  let cleanText = text.replace(/```json/g, "").replace(/```/g, "").trim();
+  console.log("Raw AI Response:", text.substring(0, 500));
+
+  // Clean markdown code blocks
+  let cleanText = text.replace(/```json/gi, "").replace(/```/g, "").trim();
 
   let data: any = {};
 
+  // -------------------------------------------------------------------------
   // Attempt 1: Standard JSON Parse
+  // -------------------------------------------------------------------------
   try {
-    const first = cleanText.indexOf('{');
-    const last = cleanText.lastIndexOf('}');
-    if (first !== -1 && last !== -1) {
-      data = JSON.parse(cleanText.substring(first, last + 1));
+    const firstBrace = cleanText.indexOf("{");
+    const lastBrace = cleanText.lastIndexOf("}");
+    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+      const jsonString = cleanText.substring(firstBrace, lastBrace + 1);
+      data = JSON.parse(jsonString);
     }
   } catch (e) {
-    console.warn("JSON Parse failed, trying regex...");
+    console.warn("JSON.parse failed, attempting regex extraction...");
   }
 
-  // Attempt 2: Regex Fallback (Scavenge missing fields)
-  const scavenge = (key: string) => {
-    const match = cleanText.match(new RegExp(`"${key}"\\s*:\\s*"([^"]*)"`, "i"));
-    return match ? match[1] : null;
+  // -------------------------------------------------------------------------
+  // Attempt 2: Regex Extraction (Scavenge Fields)
+  // -------------------------------------------------------------------------
+  const scavenge = (key: string): string | null => {
+    // Match "key": "value" or "key": null
+    const regex = new RegExp(`"${key}"\\s*:\\s*(?:"([^"]*)"|null)`, "i");
+    const match = cleanText.match(regex);
+    return match && match[1] ? match[1] : null;
   };
 
+  // Fill in missing fields
   if (!data.supplier_name) data.supplier_name = scavenge("supplier_name");
   if (!data.country) data.country = scavenge("country");
-  if (!data.certification) data.certification = scavenge("certification");
-  if (!data.measure) data.measure = scavenge("measure");
   if (!data.scope) data.scope = scavenge("scope");
+  if (!data.measure) data.measure = scavenge("measure");
+  if (!data.certification) data.certification = scavenge("certification");
   if (!data.product_category) data.product_category = scavenge("product_category");
   if (!data.date_issued) data.date_issued = scavenge("date_issued");
   if (!data.date_expired) data.date_expired = scavenge("date_expired");
 
-  // APPLY THE HARD LOGIC (Overwrite bad AI guesses)
+  // -------------------------------------------------------------------------
+  // Apply Business Logic (Overwrite bad AI guesses)
+  // -------------------------------------------------------------------------
   data = applyBusinessLogic(data);
 
-  // 4. FINAL SANITIZATION (Critical for Excel Export)
+  // -------------------------------------------------------------------------
+  // Apply 3-Year Rule for Test Reports without Expiry
+  // -------------------------------------------------------------------------
+  if (!data.date_expired && data.date_issued) {
+    const cert = (data.certification || "").toLowerCase();
+    const isTestReport =
+      cert.includes("en 455") ||
+      cert.includes("en 374") ||
+      cert.includes("migration") ||
+      cert.includes("test") ||
+      cert.includes("report");
+    if (isTestReport) {
+      data.date_expired = calculateExpiry(data.date_issued);
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Final Sanitization (All fields become strings, never null)
+  // -------------------------------------------------------------------------
   return {
     supplier_name: sanitize(data.supplier_name, "Unknown Supplier"),
     country: sanitize(data.country, "Unknown"),
     scope: sanitize(data.scope, "!"),
     measure: sanitize(data.measure, "National Regulation"),
-    certification: sanitize(data.certification, "Standard"),
+    certification: sanitize(data.certification, "Certificate"),
     product_category: sanitize(data.product_category, "Goods"),
     date_issued: sanitize(data.date_issued, ""),
     date_expired: sanitize(data.date_expired, ""),
-    status: "Success"
+    status: "Success",
   };
 }
 
-// 5. MASTER PROMPT
+// =============================================================================
+// 5. SYSTEM PROMPT (First Layer of Defense)
+// =============================================================================
 const systemPrompt = `
-You are a Compliance Data Extraction Engine.
-CRITICAL: OUTPUT RAW JSON ONLY.
+You are a Compliance Data Extraction Engine for Catering Disposables Ltd.
+CRITICAL: OUTPUT RAW JSON ONLY. NO EXPLANATIONS. NO MARKDOWN.
 
-### LOGIC RULES
-- **Gloves:** Treat EN 455, EN 374, EN 420 as VALID. Supplier = Applicant.
-- **Dates:** Format YYYY-MM-DD. If no expiry, calculate **Issue Date + 3 Years**.
-- **European Dates:** "09.10.2024" = October 9th. NEVER September.
+### DOCUMENT HANDLING
+- Treat Test Reports (EN 455, EN 374, Migration Tests) as VALID certificates.
+- For multi-language documents (Chinese + English), extract English data.
+- Supplier: Look for "Applicant", "Manufacturer", or company name.
 
-### OUTPUT SCHEME
+### DATE RULES
+- Input format: DD.MM.YYYY (European). Output: YYYY-MM-DD.
+- "09.10.2024" = October 9th, 2024. NEVER September.
+- If no expiry date exists, calculate: Issue Date + 3 Years.
+
+### CLASSIFICATION RULES
+- GENERAL (!): ISO 9001, BRC, ISO 22000, FSSC, GMP → Measure: "(EC) No 2023/2006"
+- ISO 14001 → "EU Waste Framework Directive (2008/98/EC)"
+- ISO 45001 → "EU Directive 89/391/EEC"
+- SPECIFIC (+): DoC, Migration, Food Contact → Measure: "(EC) No 1935/2004"
+- GLOVES (EN 455, EN 374, EN 420) → Scope: "+", Measure: "EU Regulation 2016/425"
+
+### OUTPUT JSON SCHEMA
 {
   "supplier_name": "string",
   "country": "string",
-  "scope": "string",
+  "scope": "! or +",
   "measure": "string",
   "certification": "string",
   "product_category": "string",
@@ -139,9 +313,14 @@ CRITICAL: OUTPUT RAW JSON ONLY.
 }
 `;
 
-// 6. MAX INPUT SIZE
-const MAX_TEXT_LENGTH = 50000;
+// =============================================================================
+// 6. CONFIGURATION
+// =============================================================================
+const MAX_INPUT_LENGTH = 50000; // Prevent timeouts
 
+// =============================================================================
+// 7. MAIN HANDLER
+// =============================================================================
 serve(async (req) => {
   // Handle CORS preflight
   if (req.method === "OPTIONS") {
@@ -149,19 +328,31 @@ serve(async (req) => {
   }
 
   try {
-    const { image, text, filename } = await req.json();
+    // -------------------------------------------------------------------------
+    // Parse Input (Support multiple payload formats)
+    // -------------------------------------------------------------------------
+    const input = await req.json();
 
-    // Require either image or text
-    if (!image && !text) {
+    // Support: { text, filename } or { fileContent, fileName } or { image, filename }
+    const rawText = input.text || input.fileContent || "";
+    const rawImage = input.image || "";
+    const fileName = input.filename || input.fileName || "Unknown File";
+
+    const isTextMode = !!rawText && !rawImage;
+    const isImageMode = !!rawImage;
+
+    if (!rawText && !rawImage) {
       return new Response(
-        JSON.stringify({ error: "Missing 'image' or 'text' field" }),
+        JSON.stringify({ error: "Missing 'text', 'fileContent', or 'image' field" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    const isTextMode = !!text;
-    console.log("Processing:", filename || "unknown", isTextMode ? "(text)" : "(image)");
+    console.log(`Processing: ${fileName} | Mode: ${isTextMode ? "TEXT" : "IMAGE"} | Length: ${rawText.length || "N/A"}`);
 
+    // -------------------------------------------------------------------------
+    // Initialize OpenAI
+    // -------------------------------------------------------------------------
     const openaiApiKey = Deno.env.get("OPENAI_API_KEY");
     if (!openaiApiKey) {
       return new Response(
@@ -172,30 +363,37 @@ serve(async (req) => {
 
     const openai = new OpenAI({ apiKey: openaiApiKey });
 
-    // Build user message content
+    // -------------------------------------------------------------------------
+    // Build Request
+    // -------------------------------------------------------------------------
     let userContent: any[];
 
     if (isTextMode) {
-      // TRUNCATE to prevent timeouts
-      const truncatedText = text.length > MAX_TEXT_LENGTH
-        ? text.slice(0, MAX_TEXT_LENGTH) + "\n\n[TRUNCATED]"
-        : text;
-
-      console.log(`Text: ${text.length} chars, truncated: ${truncatedText.length}`);
+      // Truncate to prevent timeouts
+      const truncatedText =
+        rawText.length > MAX_INPUT_LENGTH
+          ? rawText.slice(0, MAX_INPUT_LENGTH) + "\n\n[TRUNCATED - File exceeded 50,000 characters]"
+          : rawText;
 
       userContent = [
-        { type: "text", text: `Extract data from (${filename || "unknown"}):\n\n${truncatedText}` },
+        {
+          type: "text",
+          text: `Extract compliance data from this file (${fileName}):\n\n${truncatedText}`,
+        },
       ];
     } else {
       // Image mode
-      const imageContent = image.startsWith("data:") ? image : `data:image/jpeg;base64,${image}`;
+      const imageUrl = rawImage.startsWith("data:") ? rawImage : `data:image/jpeg;base64,${rawImage}`;
 
       userContent = [
-        { type: "image_url", image_url: { url: imageContent } },
-        { type: "text", text: `Extract data from (${filename || "unknown"}).` },
+        { type: "image_url", image_url: { url: imageUrl } },
+        { type: "text", text: `Extract compliance data from this certificate (${fileName}).` },
       ];
     }
 
+    // -------------------------------------------------------------------------
+    // Call OpenAI
+    // -------------------------------------------------------------------------
     const response = await openai.chat.completions.create({
       model: "gpt-4o",
       messages: [
@@ -208,47 +406,53 @@ serve(async (req) => {
     const rawContent = response.choices[0]?.message?.content;
 
     if (!rawContent) {
-      console.error("No response from OpenAI");
+      console.error("OpenAI returned empty response");
       return new Response(
         JSON.stringify({
           supplier_name: "Error: No AI Response",
           country: "Unknown",
           scope: "!",
-          measure: "Manual Review",
+          measure: "Manual Review Required",
           certification: "AI returned empty",
           product_category: "Unknown",
           date_issued: "",
           date_expired: "",
-          status: "Error"
+          status: "Error",
         }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    // Extract + Sanitize + Apply Business Logic
+    // -------------------------------------------------------------------------
+    // Extract, Apply Logic, Sanitize
+    // -------------------------------------------------------------------------
     const result = extractJSON(rawContent);
 
     return new Response(JSON.stringify(result), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
 
+    // -------------------------------------------------------------------------
   } catch (error) {
     console.error("Processing Error:", error);
 
-    // FAILSAFE RETURN (Fully Sanitized)
+    // FAILSAFE: Return sanitized error object (never crashes frontend)
     return new Response(
       JSON.stringify({
         supplier_name: "Error: Processing Failed",
         country: "Unknown",
         scope: "!",
-        measure: "Manual Review",
-        certification: "File too complex",
+        measure: "Manual Review Required",
+        certification: "System Error",
         product_category: "Unknown",
         date_issued: "",
         date_expired: "",
-        status: "Error"
+        status: "Error",
       }),
-      { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      {
+        status: 200, // Return 200 so frontend doesn't crash
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      }
     );
   }
 });
