@@ -557,16 +557,8 @@ function applyBusinessLogic(data: any, fullText: string): any {
   // STEP 6: Validate measure (whitelist + cert-based fallback)
   data.measure = validateMeasure(data.measure, data.certification);
 
-  // STEP 7: Ensure certificate_number is UNIQUE (append certification for dedup)
-  // This prevents Excel from dropping rows with same cert number but different standards
-  const certNum = sanitize(data.certificate_number, "");
-  const certName = sanitize(data.certification, "Certificate");
-  if (certNum && certNum !== certName && !certNum.includes("(")) {
-    // Append certification name to make unique: "2690-2023-003529-W1 (EN 13430)"
-    data.certificate_number = `${certNum} (${certName})`;
-  } else if (!certNum) {
-    data.certificate_number = certName;
-  }
+  // STEP 7: Keep certificate_number CLEAN (no artificial uniqueness - dedup handled in Excel export)
+  // Client requirement: Return raw certificate number as extracted
 
   // STEP 8: Default scope
   if (!data.scope || data.scope === "string") {
