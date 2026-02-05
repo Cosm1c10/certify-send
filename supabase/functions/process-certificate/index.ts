@@ -411,10 +411,12 @@ Return this JSON structure:
 }`;
 
 // =============================================================================
-// 8. CONFIGURATION
+// 8. CONFIGURATION (OPTIMIZED FOR SPEED)
 // =============================================================================
-const MAX_INPUT_LENGTH = 50000;
+const MAX_INPUT_LENGTH = 15000; // Reduced from 50k - faster processing
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
+const MODEL_TEXT = "gpt-4o-mini"; // Fast model for text extraction
+const MODEL_IMAGE = "gpt-4o";     // Vision model for images
 
 // =============================================================================
 // 9. MAIN HANDLER
@@ -477,8 +479,11 @@ serve(async (req) => {
     }
 
     // =========================================================================
-    // CALL OPENAI GPT-4o WITH JSON MODE
+    // CALL OPENAI WITH JSON MODE (Model selected based on input type)
     // =========================================================================
+    const selectedModel = isTextMode ? MODEL_TEXT : MODEL_IMAGE;
+    console.log(`Using model: ${selectedModel}`);
+
     const response = await fetch(OPENAI_API_URL, {
       method: "POST",
       headers: {
@@ -486,13 +491,14 @@ serve(async (req) => {
         "Authorization": `Bearer ${OPENAI_API_KEY}`,
       },
       body: JSON.stringify({
-        model: "gpt-4o",
+        model: selectedModel,
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: userContent },
         ],
-        max_tokens: 1500,
-        response_format: { type: "json_object" }, // ENABLE JSON MODE
+        max_tokens: 800,  // Reduced - we only need ~300-500 for JSON output
+        temperature: 0.1, // Lower = faster, more deterministic
+        response_format: { type: "json_object" },
       }),
     });
 

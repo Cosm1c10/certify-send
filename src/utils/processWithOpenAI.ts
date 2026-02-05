@@ -4,7 +4,9 @@
 // =============================================================================
 
 const OPENAI_API_KEY = import.meta.env.VITE_OPENAI_API_KEY;
-const MAX_INPUT_LENGTH = 50000;
+const MAX_INPUT_LENGTH = 15000; // Reduced for faster processing
+const MODEL_TEXT = "gpt-4o-mini"; // Fast model for text
+const MODEL_IMAGE = "gpt-4o";     // Vision model for images
 
 // =============================================================================
 // 1. SANITIZE
@@ -422,6 +424,10 @@ export async function processWithOpenAI(
       ];
     }
 
+    // Select model based on input type (mini is faster for text)
+    const selectedModel = isTextOnly ? MODEL_TEXT : MODEL_IMAGE;
+    console.log(`Using model: ${selectedModel}`);
+
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -429,12 +435,14 @@ export async function processWithOpenAI(
         Authorization: `Bearer ${OPENAI_API_KEY}`,
       },
       body: JSON.stringify({
-        model: "gpt-4o",
+        model: selectedModel,
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: userContent },
         ],
-        max_tokens: 1500,
+        max_tokens: 800,  // Reduced for speed
+        temperature: 0.1, // Lower = faster, deterministic
+        response_format: { type: "json_object" },
       }),
     });
 
