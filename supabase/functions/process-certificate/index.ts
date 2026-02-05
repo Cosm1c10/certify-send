@@ -1,10 +1,9 @@
 // =============================================================================
 // SUPABASE EDGE FUNCTION: process-certificate
-// Version: FINAL PRODUCTION v3.0 (Dedup Fix + Country Inference + Date Fallback)
+// Version: FINAL PRODUCTION v3.1 (OpenAI GPT-4o + JSON Mode)
 // =============================================================================
 // deno-lint-ignore-file no-explicit-any
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import OpenAI from "https://deno.land/x/openai@v4.20.1/mod.ts";
 
 declare const Deno: {
   env: {
@@ -31,158 +30,75 @@ function sanitize(val: any, defaultVal: string = ""): string {
 // 2. INFER COUNTRY (Checks BOTH full text AND supplier_name)
 // =============================================================================
 function inferCountry(fullText: string, supplierName: string): string | null {
-  // Combine both sources for maximum coverage
   const combined = (fullText + " " + supplierName).toLowerCase();
 
-  // CHINA - Provinces, cities, and company indicators
+  // CHINA
   if (
-    combined.includes("china") ||
-    combined.includes("anhui") ||
-    combined.includes("guangdong") ||
-    combined.includes("shanghai") ||
-    combined.includes("beijing") ||
-    combined.includes("shenzhen") ||
-    combined.includes("changsha") ||
-    combined.includes("zhejiang") ||
-    combined.includes("jiangsu") ||
-    combined.includes("hunan") ||
-    combined.includes("wenzhou") ||
-    combined.includes("fujian") ||
-    combined.includes("shandong") ||
-    combined.includes("hebei") ||
-    combined.includes("henan") ||
-    combined.includes("shaoneng") ||
-    combined.includes("intco") ||
+    combined.includes("china") || combined.includes("anhui") || combined.includes("guangdong") ||
+    combined.includes("shanghai") || combined.includes("beijing") || combined.includes("shenzhen") ||
+    combined.includes("changsha") || combined.includes("zhejiang") || combined.includes("jiangsu") ||
+    combined.includes("hunan") || combined.includes("wenzhou") || combined.includes("fujian") ||
+    combined.includes("shandong") || combined.includes("hebei") || combined.includes("henan") ||
+    combined.includes("shaoneng") || combined.includes("intco") ||
     combined.match(/\bcn\b/) ||
-    combined.match(/[\u4e00-\u9fff]/) // Chinese characters
+    combined.match(/[\u4e00-\u9fff]/)
   ) {
     return "China";
   }
 
   // TURKEY
   if (
-    combined.includes("turkey") ||
-    combined.includes("türkiye") ||
-    combined.includes("turkiye") ||
-    combined.includes("istanbul") ||
-    combined.includes("ankara") ||
-    combined.includes("izmir") ||
-    combined.includes("bursa") ||
-    combined.includes("boran") ||
-    combined.includes("mopack") ||
-    combined.includes("san. ve tic") ||
-    combined.match(/\.tr\b/)
+    combined.includes("turkey") || combined.includes("türkiye") || combined.includes("turkiye") ||
+    combined.includes("istanbul") || combined.includes("ankara") || combined.includes("izmir") ||
+    combined.includes("boran") || combined.includes("mopack") || combined.includes("san. ve tic")
   ) {
     return "Turkey";
   }
 
   // GERMANY
-  if (
-    combined.includes("germany") ||
-    combined.includes("deutschland") ||
-    combined.includes("gmbh") ||
-    combined.includes("munich") ||
-    combined.includes("berlin") ||
-    combined.includes("frankfurt") ||
-    combined.includes("hamburg") ||
-    combined.match(/\bde\b/)
-  ) {
+  if (combined.includes("germany") || combined.includes("deutschland") || combined.includes("gmbh") ||
+      combined.includes("munich") || combined.includes("berlin")) {
     return "Germany";
   }
 
   // UK
-  if (
-    combined.includes("united kingdom") ||
-    combined.includes("england") ||
-    combined.includes("london") ||
-    combined.includes("manchester") ||
-    combined.includes("birmingham") ||
-    combined.includes("scotland") ||
-    combined.includes("wales") ||
-    combined.match(/\buk\b/) ||
-    combined.match(/\bgb\b/)
-  ) {
+  if (combined.includes("united kingdom") || combined.includes("england") || combined.includes("london") ||
+      combined.match(/\buk\b/) || combined.match(/\bgb\b/)) {
     return "UK";
   }
 
   // IRELAND
-  if (
-    combined.includes("ireland") ||
-    combined.includes("dublin") ||
-    combined.includes("cork") ||
-    combined.includes("galway") ||
-    combined.includes("limerick") ||
-    combined.match(/\bie\b/)
-  ) {
+  if (combined.includes("ireland") || combined.includes("dublin") || combined.includes("cork")) {
     return "Ireland";
   }
 
   // USA
-  if (
-    combined.includes("united states") ||
-    combined.includes("usa") ||
-    combined.includes("california") ||
-    combined.includes("new york") ||
-    combined.includes("texas") ||
-    combined.includes("florida") ||
-    combined.match(/\bus\b/)
-  ) {
+  if (combined.includes("united states") || combined.includes("usa") || combined.includes("california")) {
     return "USA";
   }
 
   // NETHERLANDS
-  if (
-    combined.includes("netherlands") ||
-    combined.includes("holland") ||
-    combined.includes("amsterdam") ||
-    combined.includes("rotterdam") ||
-    combined.match(/\bnl\b/)
-  ) {
+  if (combined.includes("netherlands") || combined.includes("holland") || combined.includes("amsterdam")) {
     return "Netherlands";
   }
 
   // ITALY
-  if (
-    combined.includes("italy") ||
-    combined.includes("italia") ||
-    combined.includes("milan") ||
-    combined.includes("rome") ||
-    combined.includes("s.r.l") ||
-    combined.match(/\bit\b/)
-  ) {
+  if (combined.includes("italy") || combined.includes("italia") || combined.includes("s.r.l")) {
     return "Italy";
   }
 
   // FRANCE
-  if (
-    combined.includes("france") ||
-    combined.includes("paris") ||
-    combined.includes("lyon") ||
-    combined.includes("marseille") ||
-    combined.match(/\bfr\b/)
-  ) {
+  if (combined.includes("france") || combined.includes("paris")) {
     return "France";
   }
 
   // POLAND
-  if (
-    combined.includes("poland") ||
-    combined.includes("polska") ||
-    combined.includes("warsaw") ||
-    combined.includes("krakow") ||
-    combined.match(/\bpl\b/)
-  ) {
+  if (combined.includes("poland") || combined.includes("polska") || combined.includes("warsaw")) {
     return "Poland";
   }
 
   // SPAIN
-  if (
-    combined.includes("spain") ||
-    combined.includes("españa") ||
-    combined.includes("madrid") ||
-    combined.includes("barcelona") ||
-    combined.match(/\bes\b/)
-  ) {
+  if (combined.includes("spain") || combined.includes("españa") || combined.includes("madrid")) {
     return "Spain";
   }
 
@@ -193,17 +109,13 @@ function inferCountry(fullText: string, supplierName: string): string | null {
 // 3. EXTRACT DATE FROM TEXT (Regex Fallback)
 // =============================================================================
 function extractDateFromText(text: string): string | null {
-  // Pattern 1: DD.MM.YYYY or DD/MM/YYYY or DD-MM-YYYY
   const euroPattern = /(\d{1,2})[./-](\d{1,2})[./-](20\d{2})/g;
-  // Pattern 2: YYYY-MM-DD (ISO)
   const isoPattern = /(20\d{2})-(\d{1,2})-(\d{1,2})/g;
 
   const dates: { date: string; index: number }[] = [];
 
-  // Find European format dates
   let match: RegExpExecArray | null;
   while ((match = euroPattern.exec(text)) !== null) {
-    // Skip if this looks like a regulation number (e.g., "2016/425")
     const before = text.substring(Math.max(0, match.index - 5), match.index);
     if (before.match(/\d+$/) || before.match(/[:/]$/)) continue;
 
@@ -211,14 +123,12 @@ function extractDateFromText(text: string): string | null {
     const month = match[2].padStart(2, "0");
     const year = match[3];
 
-    // Validate month
     const monthNum = parseInt(month, 10);
     if (monthNum >= 1 && monthNum <= 12) {
       dates.push({ date: `${year}-${month}-${day}`, index: match.index });
     }
   }
 
-  // Find ISO format dates
   while ((match = isoPattern.exec(text)) !== null) {
     const year = match[1];
     const month = match[2].padStart(2, "0");
@@ -230,7 +140,6 @@ function extractDateFromText(text: string): string | null {
     }
   }
 
-  // Return the LAST date found (signatures/dates typically at bottom)
   if (dates.length > 0) {
     return dates[dates.length - 1].date;
   }
@@ -263,7 +172,7 @@ function applyBusinessLogic(data: any, fullText: string): any {
   const textLower = fullText.toLowerCase();
 
   // =========================================================================
-  // FIX #1: COUNTRY INFERENCE (Check both text AND supplier name)
+  // FIX #1: COUNTRY INFERENCE
   // =========================================================================
   if (!data.country || data.country === "Unknown" || data.country === "") {
     const inferredCountry = inferCountry(fullText, data.supplier_name || "");
@@ -274,7 +183,7 @@ function applyBusinessLogic(data: any, fullText: string): any {
   }
 
   // =========================================================================
-  // FIX #2: DATE FALLBACK (Regex extraction if AI missed it)
+  // FIX #2: DATE FALLBACK
   // =========================================================================
   if (!data.date_issued || data.date_issued === "null" || data.date_issued === "") {
     const extractedDate = extractDateFromText(fullText);
@@ -285,23 +194,14 @@ function applyBusinessLogic(data: any, fullText: string): any {
   }
 
   // =========================================================================
-  // RULE 1: GLOVES (Highest Priority - "Anhui Intco" Files)
+  // RULE 1: GLOVES (Highest Priority)
   // =========================================================================
   const isGlove =
-    cert.includes("en 455") ||
-    cert.includes("en 374") ||
-    cert.includes("en 420") ||
-    cert.includes("en 388") ||
-    cert.includes("module b") ||
-    cert.includes("cat iii") ||
-    cert.includes("category iii") ||
-    cert.includes("2016/425") ||
-    prod.includes("glove") ||
-    prod.includes("nitrile") ||
-    supp.includes("intco") ||
-    textLower.includes("en 455") ||
-    textLower.includes("en 374") ||
-    textLower.includes("en 420");
+    cert.includes("en 455") || cert.includes("en 374") || cert.includes("en 420") ||
+    cert.includes("en 388") || cert.includes("module b") || cert.includes("cat iii") ||
+    cert.includes("category iii") || cert.includes("2016/425") ||
+    prod.includes("glove") || prod.includes("nitrile") || supp.includes("intco") ||
+    textLower.includes("en 455") || textLower.includes("en 374") || textLower.includes("en 420");
 
   if (isGlove) {
     data.scope = "+";
@@ -311,9 +211,8 @@ function applyBusinessLogic(data: any, fullText: string): any {
       data.product_category = "Gloves";
     }
 
-    // FIX #3: DEDUP FIX - Copy certification to certificate_number if missing
+    // FIX #3: DEDUP - Copy certification to certificate_number
     if (!data.certificate_number || data.certificate_number === "" || data.certificate_number === "null") {
-      // Extract the specific EN standard as the certificate number
       if (textLower.includes("en 455")) data.certificate_number = "EN 455";
       else if (textLower.includes("en 374")) data.certificate_number = "EN 374";
       else if (textLower.includes("en 420")) data.certificate_number = "EN 420";
@@ -322,7 +221,7 @@ function applyBusinessLogic(data: any, fullText: string): any {
       else data.certificate_number = "Glove Test Report";
     }
 
-    // 3-Year Rule for test reports
+    // 3-Year Rule
     if (data.date_issued && (!data.date_expired || data.date_expired === "null" || data.date_expired === "")) {
       data.date_expired = calculateExpiry(data.date_issued);
     }
@@ -351,7 +250,7 @@ function applyBusinessLogic(data: any, fullText: string): any {
   }
 
   // =========================================================================
-  // RULE 4: ISO 27001 (Information Security)
+  // RULE 4: ISO 27001
   // =========================================================================
   if (cert.includes("iso 27001") || cert.includes("27001")) {
     data.scope = "!";
@@ -361,7 +260,7 @@ function applyBusinessLogic(data: any, fullText: string): any {
   }
 
   // =========================================================================
-  // RULE 5: FSC (Forestry)
+  // RULE 5: FSC
   // =========================================================================
   if ((cert.includes("fsc") && !cert.includes("fssc")) || (textLower.includes("fsc") && !textLower.includes("fssc"))) {
     data.scope = "!";
@@ -374,16 +273,11 @@ function applyBusinessLogic(data: any, fullText: string): any {
   // RULE 6: Factory Certs (ISO 9001, BRC, BRCGS, ISO 22000, FSSC)
   // =========================================================================
   const isFactoryCert =
-    cert.includes("iso 9001") ||
-    cert.includes("9001") ||
-    cert.includes("brc") ||
-    cert.includes("brcgs") ||
-    cert.includes("iso 22000") ||
-    cert.includes("22000") ||
-    cert.includes("fssc") ||
-    cert.includes("gmp") ||
-    textLower.includes("iso 9001") ||
-    textLower.includes("brcgs");
+    cert.includes("iso 9001") || cert.includes("9001") ||
+    cert.includes("brc") || cert.includes("brcgs") ||
+    cert.includes("iso 22000") || cert.includes("22000") ||
+    cert.includes("fssc") || cert.includes("gmp") ||
+    textLower.includes("iso 9001") || textLower.includes("brcgs");
 
   if (isFactoryCert) {
     data.scope = "!";
@@ -415,17 +309,13 @@ function applyBusinessLogic(data: any, fullText: string): any {
   }
 
   // =========================================================================
-  // RULE 9: DoC / Migration / Food Contact
+  // RULE 9: DoC / Migration
   // =========================================================================
   const isProductTest =
-    cert.includes("declaration of conformity") ||
-    cert.includes("declaration of compliance") ||
-    cert.includes("doc") ||
-    cert.includes("migration") ||
-    cert.includes("food contact") ||
+    cert.includes("declaration of conformity") || cert.includes("declaration of compliance") ||
+    cert.includes("doc") || cert.includes("migration") || cert.includes("food contact") ||
     cert.includes("1935/2004") ||
-    textLower.includes("declaration of conformity") ||
-    textLower.includes("migration");
+    textLower.includes("declaration of conformity") || textLower.includes("migration");
 
   if (isProductTest) {
     data.scope = "+";
@@ -434,7 +324,7 @@ function applyBusinessLogic(data: any, fullText: string): any {
     }
     if (!data.certificate_number) data.certificate_number = data.certification || "DoC";
 
-    // 3-Year Rule for DoC if no expiry
+    // 3-Year Rule for DoC
     if (data.date_issued && (!data.date_expired || data.date_expired === "null" || data.date_expired === "")) {
       data.date_expired = calculateExpiry(data.date_issued);
     }
@@ -453,12 +343,11 @@ function applyBusinessLogic(data: any, fullText: string): any {
   }
 
   // =========================================================================
-  // DEFAULT: Ensure certificate_number is never empty
+  // DEFAULT
   // =========================================================================
   if (!data.certificate_number || data.certificate_number === "" || data.certificate_number === "null") {
     data.certificate_number = data.certification || "Certificate";
   }
-
   if (!data.scope) data.scope = "!";
   if (!data.measure) data.measure = "National Regulation";
 
@@ -466,49 +355,18 @@ function applyBusinessLogic(data: any, fullText: string): any {
 }
 
 // =============================================================================
-// 6. EXTRACT JSON (Self-Healing Parser)
+// 6. PROCESS AI RESPONSE
 // =============================================================================
-function extractJSON(text: string, fullInput: string): any {
-  console.log("Raw AI Response:", text.substring(0, 500));
+function processAIResponse(rawJSON: any, fullInput: string): any {
+  let data = rawJSON || {};
 
-  let cleanText = text.replace(/```json/gi, "").replace(/```/g, "").trim();
-  let data: any = {};
-
-  // Attempt 1: Standard JSON Parse
-  try {
-    const firstBrace = cleanText.indexOf("{");
-    const lastBrace = cleanText.lastIndexOf("}");
-    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-      data = JSON.parse(cleanText.substring(firstBrace, lastBrace + 1));
-    }
-  } catch {
-    console.warn("JSON.parse failed, attempting regex extraction...");
-  }
-
-  // Attempt 2: Regex Extraction
-  const scavenge = (key: string): string | null => {
-    const regex = new RegExp(`"${key}"\\s*:\\s*(?:"([^"]*)"|null)`, "i");
-    const match = cleanText.match(regex);
-    return match && match[1] ? match[1] : null;
-  };
-
-  if (!data.supplier_name) data.supplier_name = scavenge("supplier_name");
-  if (!data.certificate_number) data.certificate_number = scavenge("certificate_number");
-  if (!data.country) data.country = scavenge("country");
-  if (!data.scope) data.scope = scavenge("scope");
-  if (!data.measure) data.measure = scavenge("measure");
-  if (!data.certification) data.certification = scavenge("certification");
-  if (!data.product_category) data.product_category = scavenge("product_category");
-  if (!data.date_issued) data.date_issued = scavenge("date_issued");
-  if (!data.date_expired) data.date_expired = scavenge("date_expired");
-
-  // Apply Business Logic (with full text for inference)
+  // Apply Business Logic
   data = applyBusinessLogic(data, fullInput);
 
-  // FINAL SANITIZATION - ALL FIELDS MUST BE STRINGS
+  // FINAL SANITIZATION
   return {
     supplier_name: sanitize(data.supplier_name, "Unknown Supplier"),
-    certificate_number: sanitize(data.certificate_number, "Certificate"), // CRITICAL: Prevents dedup
+    certificate_number: sanitize(data.certificate_number, "Certificate"),
     country: sanitize(data.country, "Unknown"),
     scope: sanitize(data.scope, "!"),
     measure: sanitize(data.measure, "National Regulation"),
@@ -523,20 +381,23 @@ function extractJSON(text: string, fullInput: string): any {
 // =============================================================================
 // 7. SYSTEM PROMPT
 // =============================================================================
-const systemPrompt = `
-You are a Compliance Data Extraction Engine.
-CRITICAL: OUTPUT RAW JSON ONLY. NO MARKDOWN.
+const systemPrompt = `You are a Compliance Data Extraction Engine. Extract certificate data and return ONLY valid JSON.
 
-### EXTRACTION RULES
-- supplier_name: Look for "Applicant", "Manufacturer", company letterhead.
-- certificate_number: Extract the certificate/report number if visible.
-- country: Extract from address. If unclear, return null.
-- certification: The standard name (e.g., "EN 455", "ISO 9001", "BRC").
-- product_category: Product description from the certificate.
-- date_issued: Issue/Signed date. Format: YYYY-MM-DD. "09.10.2024" = Oct 9th (European).
-- date_expired: Expiry date. If not found, return null.
+EXTRACTION RULES:
+- supplier_name: Find "Applicant", "Manufacturer", or company name from letterhead
+- certificate_number: The certificate/report number if visible
+- country: Extract from address
+- certification: Standard name (e.g., "EN 455", "ISO 9001", "BRC")
+- product_category: Product description
+- date_issued: Issue date as YYYY-MM-DD. European format: "09.10.2024" = October 9th
+- date_expired: Expiry date as YYYY-MM-DD, or null if not found
 
-### OUTPUT SCHEMA
+CLASSIFICATION:
+- Gloves (EN 455/374/420): scope="+", measure="EU Regulation 2016/425"
+- ISO 9001/BRC/GMP: scope="!", measure="(EC) No 2023/2006"
+- DoC/Migration: scope="+", measure="(EC) No 1935/2004"
+
+Return this JSON structure:
 {
   "supplier_name": "string",
   "certificate_number": "string or null",
@@ -547,13 +408,13 @@ CRITICAL: OUTPUT RAW JSON ONLY. NO MARKDOWN.
   "product_category": "string",
   "date_issued": "YYYY-MM-DD or null",
   "date_expired": "YYYY-MM-DD or null"
-}
-`;
+}`;
 
 // =============================================================================
 // 8. CONFIGURATION
 // =============================================================================
 const MAX_INPUT_LENGTH = 50000;
+const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
 
 // =============================================================================
 // 9. MAIN HANDLER
@@ -582,16 +443,20 @@ serve(async (req) => {
 
     console.log(`Processing: ${fileName} | Mode: ${isTextMode ? "TEXT" : "IMAGE"} | Length: ${rawText.length || "N/A"}`);
 
-    const openaiApiKey = Deno.env.get("OPENAI_API_KEY");
-    if (!openaiApiKey) {
+    // =========================================================================
+    // GET OPENAI API KEY
+    // =========================================================================
+    const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
+    if (!OPENAI_API_KEY) {
       return new Response(
-        JSON.stringify({ error: "OpenAI API key not configured" }),
+        JSON.stringify({ error: "OPENAI_API_KEY not configured" }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    const openai = new OpenAI({ apiKey: openaiApiKey });
-
+    // =========================================================================
+    // BUILD REQUEST
+    // =========================================================================
     let userContent: any[];
     let truncatedText = "";
 
@@ -611,16 +476,36 @@ serve(async (req) => {
       ];
     }
 
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userContent },
-      ],
-      max_tokens: 1500,
+    // =========================================================================
+    // CALL OPENAI GPT-4o WITH JSON MODE
+    // =========================================================================
+    const response = await fetch(OPENAI_API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: "gpt-4o",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userContent },
+        ],
+        max_tokens: 1500,
+        response_format: { type: "json_object" }, // ENABLE JSON MODE
+      }),
     });
 
-    const rawContent = response.choices[0]?.message?.content;
+    if (!response.ok) {
+      const errorData = await response.json();
+      console.error("OpenAI API Error:", errorData);
+      throw new Error(errorData.error?.message || `OpenAI API Error: ${response.status}`);
+    }
+
+    const aiResponse = await response.json();
+    const rawContent = aiResponse.choices?.[0]?.message?.content;
+
+    console.log("Raw AI Response:", rawContent?.substring(0, 500));
 
     if (!rawContent) {
       return new Response(
@@ -640,8 +525,19 @@ serve(async (req) => {
       );
     }
 
-    // Extract with full text for smart inference
-    const result = extractJSON(rawContent, truncatedText || rawText);
+    // =========================================================================
+    // PARSE JSON RESPONSE (JSON Mode guarantees valid JSON)
+    // =========================================================================
+    let parsedData: any;
+    try {
+      parsedData = JSON.parse(rawContent);
+    } catch (e) {
+      console.error("JSON Parse Error (unexpected with JSON mode):", e);
+      parsedData = {};
+    }
+
+    // Process with business logic and sanitization
+    const result = processAIResponse(parsedData, truncatedText || rawText);
 
     return new Response(JSON.stringify(result), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
