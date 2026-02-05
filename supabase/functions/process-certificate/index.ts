@@ -155,9 +155,14 @@ function inferMeasureFromCert(certification?: string): string {
     return "FSC";
   }
 
-  // EN 13432
+  // EN 13432 Compostable
   if (cert.includes("13432") || cert.includes("compostable")) {
     return "EN 13432";
+  }
+
+  // EN 13430 Recyclable
+  if (cert.includes("13430") || cert.includes("recyclable") || cert.includes("recyclass")) {
+    return "EN 13430";
   }
 
   // EU 10/2011
@@ -326,9 +331,26 @@ function detectCertTypeFromText(fullText: string): { scope: string; measure: str
     return { scope: "+", measure: "(EC) No 10/2011", certification: "EU 10/2011" };
   }
 
-  // EN 13432 Compostable
-  if (t.includes("en 13432") || t.includes("13432") || t.includes("compostable") || t.includes("din certco")) {
+  // =========================================================================
+  // PRIORITY 7: EN 13432 Compostable (MUST check BEFORE DoC/Migration!)
+  // =========================================================================
+  if (t.includes("en 13432") || t.includes("13432") || t.includes("compostable")) {
     return { scope: "+", measure: "EN 13432", certification: "EN 13432" };
+  }
+
+  // =========================================================================
+  // PRIORITY 8: EN 13430 Recyclable (MUST check BEFORE DoC/Migration!)
+  // =========================================================================
+  if (t.includes("en 13430") || t.includes("13430") || t.includes("recyclable") || t.includes("recyclass")) {
+    return { scope: "+", measure: "EN 13430", certification: "EN 13430" };
+  }
+
+  // =========================================================================
+  // PRIORITY 9: DIN CERTCO (check AFTER specific EN standards)
+  // =========================================================================
+  if (t.includes("din certco") && !t.includes("13432") && !t.includes("13430")) {
+    // DIN CERTCO without specific standard - default to compostable
+    return { scope: "+", measure: "EN 13432", certification: "DIN CERTCO" };
   }
 
   // Declaration of Conformity / Migration
@@ -398,9 +420,15 @@ function applyBusinessLogic(data: any, fullText: string): any {
   // STEP 5: Validate measure (must be from whitelist, fallback to cert-based lookup)
   data.measure = validateMeasure(data.measure, data.certification);
 
-  // STEP 6: Ensure certificate_number for dedup
-  if (!data.certificate_number || data.certificate_number === "string" || data.certificate_number === "") {
-    data.certificate_number = data.certification || "Certificate";
+  // STEP 6: Ensure certificate_number is UNIQUE (append certification for dedup)
+  // This prevents Excel from dropping rows with same cert number but different standards
+  const certNum = sanitize(data.certificate_number, "");
+  const certName = sanitize(data.certification, "Certificate");
+  if (certNum && certNum !== certName && !certNum.includes("(")) {
+    // Append certification name to make unique: "2690-2023-003529-W1 (EN 13430)"
+    data.certificate_number = `${certNum} (${certName})`;
+  } else if (!certNum) {
+    data.certificate_number = certName;
   }
 
   // STEP 7: Default scope
