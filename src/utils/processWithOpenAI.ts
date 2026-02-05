@@ -217,12 +217,13 @@ function inferCountry(fullText: string, supplierName: string): string | null {
 }
 
 // =============================================================================
-// 6. EXTRACT DATE FROM TEXT
+// 6. DESPERATE DATE SCAVENGER (Multi-pattern extraction)
 // =============================================================================
 function extractDateFromText(text: string): string | null {
-  const euroPattern = /(\d{1,2})[./-](\d{1,2})[./-](20\d{2})/g;
   const dates: string[] = [];
 
+  // PATTERN 1: European format DD.MM.YYYY or DD/MM/YYYY or DD-MM-YYYY
+  const euroPattern = /(\d{1,2})[./-](\d{1,2})[./-](20\d{2})/g;
   let match: RegExpExecArray | null;
   while ((match = euroPattern.exec(text)) !== null) {
     const before = text.substring(Math.max(0, match.index - 5), match.index);
@@ -238,7 +239,59 @@ function extractDateFromText(text: string): string | null {
     }
   }
 
-  return dates.length > 0 ? dates[dates.length - 1] : null;
+  // PATTERN 2: ISO format YYYY-MM-DD
+  const isoPattern = /(20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})/g;
+  while ((match = isoPattern.exec(text)) !== null) {
+    const year = match[1];
+    const month = match[2].padStart(2, "0");
+    const day = match[3].padStart(2, "0");
+
+    const monthNum = parseInt(month, 10);
+    const dayNum = parseInt(day, 10);
+    if (monthNum >= 1 && monthNum <= 12 && dayNum >= 1 && dayNum <= 31) {
+      dates.push(`${year}-${month}-${day}`);
+    }
+  }
+
+  // PATTERN 3: Month name format (January 15, 2024 or 15 January 2024)
+  const monthNames = "(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)";
+  const monthNamePattern = new RegExp(`(\\d{1,2})[\\s.,/-]*(${monthNames})[\\s.,/-]*(20\\d{2})|(${monthNames})[\\s.,/-]*(\\d{1,2})[\\s.,/-]*(20\\d{2})`, "gi");
+  while ((match = monthNamePattern.exec(text)) !== null) {
+    let day: string, monthStr: string, year: string;
+    if (match[1]) {
+      // Format: 15 January 2024
+      day = match[1];
+      monthStr = match[2];
+      year = match[3];
+    } else {
+      // Format: January 15, 2024
+      monthStr = match[4];
+      day = match[5];
+      year = match[6];
+    }
+
+    const monthMap: { [key: string]: string } = {
+      jan: "01", january: "01", feb: "02", february: "02", mar: "03", march: "03",
+      apr: "04", april: "04", may: "05", jun: "06", june: "06", jul: "07", july: "07",
+      aug: "08", august: "08", sep: "09", september: "09", oct: "10", october: "10",
+      nov: "11", november: "11", dec: "12", december: "12"
+    };
+    const month = monthMap[monthStr.toLowerCase()];
+    if (month) {
+      dates.push(`${year}-${month}-${day.padStart(2, "0")}`);
+    }
+  }
+
+  // PATTERN 4: Year-only as last resort (use Jan 1st)
+  if (dates.length === 0) {
+    const yearOnlyPattern = /\b(20[12]\d)\b/g;
+    while ((match = yearOnlyPattern.exec(text)) !== null) {
+      dates.push(`${match[1]}-01-01`);
+    }
+  }
+
+  // Return FIRST valid date (most likely to be issue date)
+  return dates.length > 0 ? dates[0] : null;
 }
 
 // =============================================================================
@@ -385,10 +438,53 @@ function applyBusinessLogic(data: any, fullText: string): any {
     }
   }
 
-  // STEP 5: Validate measure (whitelist + cert-based fallback)
+  // =========================================================================
+  // STEP 5: CERTIFICATION-BASED MEASURE OVERRIDE (Catches text-first misses)
+  // This runs BEFORE whitelist validation to force correct mappings
+  // =========================================================================
+  const certLower = (data.certification || "").toLowerCase();
+
+  // ISO 45001 -> Safety (NOT GMP!)
+  if (certLower.includes("45001") || certLower.includes("iso 45001")) {
+    console.log("OVERRIDE: ISO 45001 detected in certification - forcing EU Directive 89/391/EEC");
+    data.measure = "EU Directive 89/391/EEC";
+    data.scope = "!";
+  }
+  // ISO 14001 -> Environmental
+  else if (certLower.includes("14001") || certLower.includes("iso 14001")) {
+    data.measure = "EU Waste Framework Directive (2008/98/EC)";
+    data.scope = "!";
+  }
+  // ISO 27001 -> GDPR
+  else if (certLower.includes("27001") || certLower.includes("iso 27001")) {
+    data.measure = "EU GDPR";
+    data.scope = "!";
+  }
+  // FSC (not FSSC!)
+  else if (certLower.match(/\bfsc\b/) && !certLower.includes("fssc")) {
+    data.measure = "FSC";
+    data.scope = "!";
+  }
+  // EN 13432 Compostable
+  else if (certLower.includes("13432") || certLower.includes("compostable")) {
+    data.measure = "EN 13432";
+    data.scope = "+";
+  }
+  // EN 13430 Recyclable
+  else if (certLower.includes("13430") || certLower.includes("recyclable")) {
+    data.measure = "EN 13430";
+    data.scope = "+";
+  }
+  // Gloves
+  else if (certLower.includes("en 455") || certLower.includes("en 374") || certLower.includes("en 420") || certLower.includes("en 388")) {
+    data.measure = "EU Regulation 2016/425";
+    data.scope = "+";
+  }
+
+  // STEP 6: Validate measure (whitelist + cert-based fallback)
   data.measure = validateMeasure(data.measure, data.certification);
 
-  // STEP 6: Ensure certificate_number is UNIQUE (append certification for dedup)
+  // STEP 7: Ensure certificate_number is UNIQUE (append certification for dedup)
   // This prevents Excel from dropping rows with same cert number but different standards
   const certNum = sanitize(data.certificate_number, "");
   const certName = sanitize(data.certification, "Certificate");
@@ -399,9 +495,15 @@ function applyBusinessLogic(data: any, fullText: string): any {
     data.certificate_number = certName;
   }
 
-  // STEP 7: Default scope
+  // STEP 8: Default scope
   if (!data.scope || data.scope === "string") {
     data.scope = "!";
+  }
+
+  // STEP 9: Apply 3-Year Rule if still no expiry (catches cases where measure changed)
+  if (data.date_issued && (!data.date_expired || data.date_expired === "")) {
+    data.date_expired = calculateExpiry(data.date_issued);
+    console.log("Applied 3-Year Rule fallback: expiry =", data.date_expired);
   }
 
   return data;
