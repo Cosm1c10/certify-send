@@ -1,6 +1,6 @@
 // =============================================================================
 // LOCAL PROCESSING: processWithOpenAI.ts
-// Version: FINAL PRODUCTION v2.0 (Smart Logic)
+// Version: FINAL PRODUCTION v3.0 (Dedup Fix + Country Inference + Date Fallback)
 // =============================================================================
 
 const OPENAI_API_KEY = import.meta.env.VITE_OPENAI_API_KEY;
@@ -17,127 +17,133 @@ function sanitize(val: any, defaultVal: string = ""): string {
 }
 
 // =============================================================================
-// 2. INFER COUNTRY
+// 2. INFER COUNTRY (Checks BOTH text AND supplier_name)
 // =============================================================================
-function inferCountry(text: string): string | null {
-  const t = text.toLowerCase();
+function inferCountry(fullText: string, supplierName: string): string | null {
+  const combined = (fullText + " " + supplierName).toLowerCase();
 
-  if (t.includes("china") || t.includes("anhui") || t.includes("guangdong") ||
-      t.includes("shanghai") || t.includes("beijing") || t.includes("shenzhen") ||
-      t.includes("changsha") || t.includes("zhejiang") || t.includes("jiangsu") ||
-      t.includes("shaoneng") || t.includes("intco") || t.includes("hunan")) {
+  // CHINA
+  if (
+    combined.includes("china") || combined.includes("anhui") || combined.includes("guangdong") ||
+    combined.includes("shanghai") || combined.includes("beijing") || combined.includes("shenzhen") ||
+    combined.includes("changsha") || combined.includes("zhejiang") || combined.includes("jiangsu") ||
+    combined.includes("hunan") || combined.includes("wenzhou") || combined.includes("fujian") ||
+    combined.includes("shaoneng") || combined.includes("intco") ||
+    combined.match(/[\u4e00-\u9fff]/) // Chinese characters
+  ) {
     return "China";
   }
 
-  if (t.includes("turkey") || t.includes("türkiye") || t.includes("turkiye") ||
-      t.includes("istanbul") || t.includes("ankara") || t.includes("boran") || t.includes("mopack")) {
+  // TURKEY
+  if (
+    combined.includes("turkey") || combined.includes("türkiye") || combined.includes("istanbul") ||
+    combined.includes("ankara") || combined.includes("boran") || combined.includes("mopack") ||
+    combined.includes("san. ve tic")
+  ) {
     return "Turkey";
   }
 
-  if (t.includes("germany") || t.includes("deutschland") || t.includes("gmbh")) {
+  // GERMANY
+  if (combined.includes("germany") || combined.includes("deutschland") || combined.includes("gmbh")) {
     return "Germany";
   }
 
-  if (t.includes("united kingdom") || t.includes("england") || t.includes("london") || t.match(/\buk\b/)) {
+  // UK
+  if (combined.includes("united kingdom") || combined.includes("england") || combined.includes("london") || combined.match(/\buk\b/)) {
     return "UK";
   }
 
-  if (t.includes("ireland") || t.includes("dublin") || t.includes("cork")) {
+  // IRELAND
+  if (combined.includes("ireland") || combined.includes("dublin") || combined.includes("cork")) {
     return "Ireland";
   }
 
-  if (t.includes("netherlands") || t.includes("holland") || t.includes("amsterdam")) {
+  // NETHERLANDS
+  if (combined.includes("netherlands") || combined.includes("holland") || combined.includes("amsterdam")) {
     return "Netherlands";
   }
 
-  if (t.includes("italy") || t.includes("italia") || t.includes("milan")) {
+  // ITALY
+  if (combined.includes("italy") || combined.includes("italia") || combined.includes("s.r.l")) {
     return "Italy";
   }
 
-  if (t.includes("france") || t.includes("paris")) {
+  // FRANCE
+  if (combined.includes("france") || combined.includes("paris")) {
     return "France";
   }
 
-  if (t.includes("poland") || t.includes("polska") || t.includes("warsaw")) {
+  // POLAND
+  if (combined.includes("poland") || combined.includes("polska") || combined.includes("warsaw")) {
     return "Poland";
+  }
+
+  // SPAIN
+  if (combined.includes("spain") || combined.includes("españa") || combined.includes("madrid")) {
+    return "Spain";
   }
 
   return null;
 }
 
 // =============================================================================
-// 3. SMART DATE EXTRACTION
+// 3. EXTRACT DATE FROM TEXT (Regex Fallback)
 // =============================================================================
-function extractDateFromText(text: string, type: "issue" | "expiry"): string | null {
-  const datePatterns = [
-    /(\d{1,2})[./-](\d{1,2})[./-](20\d{2})/g,
-    /(20\d{2})-(\d{1,2})-(\d{1,2})/g,
-  ];
+function extractDateFromText(text: string): string | null {
+  const euroPattern = /(\d{1,2})[./-](\d{1,2})[./-](20\d{2})/g;
+  const isoPattern = /(20\d{2})-(\d{1,2})-(\d{1,2})/g;
 
-  const issueKeywords = /(?:date|dated|issued|issue date|signed|signature|valid from|effective)/i;
-  const expiryKeywords = /(?:expir|valid until|valid to|validity|expires|expiration)/i;
-  const keywords = type === "issue" ? issueKeywords : expiryKeywords;
+  const dates: { date: string; index: number }[] = [];
 
-  const allDates: { date: string; index: number; nearKeyword: boolean }[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = euroPattern.exec(text)) !== null) {
+    const before = text.substring(Math.max(0, match.index - 5), match.index);
+    if (before.match(/\d+$/) || before.match(/[:/]$/)) continue;
 
-  for (const pattern of datePatterns) {
-    let match: RegExpExecArray | null;
-    const regex = new RegExp(pattern.source, pattern.flags);
-    while ((match = regex.exec(text)) !== null) {
-      const contextStart = Math.max(0, match.index - 100);
-      const context = text.substring(contextStart, match.index + match[0].length);
+    const day = match[1].padStart(2, "0");
+    const month = match[2].padStart(2, "0");
+    const year = match[3];
 
-      // Skip regulation years
-      const beforeDate = text.substring(Math.max(0, match.index - 10), match.index);
-      if (beforeDate.match(/[:/]\s*$/) || beforeDate.match(/\d+\s*$/)) {
-        continue;
-      }
-
-      const nearKeyword = keywords.test(context);
-      let isoDate = "";
-
-      if (match[0].match(/^\d{1,2}[./-]\d{1,2}[./-]20\d{2}$/)) {
-        const parts = match[0].split(/[./-]/);
-        isoDate = `${parts[2]}-${parts[1].padStart(2, "0")}-${parts[0].padStart(2, "0")}`;
-      } else if (match[0].match(/^20\d{2}-\d{1,2}-\d{1,2}$/)) {
-        isoDate = match[0];
-      }
-
-      if (isoDate && isoDate.match(/^20\d{2}-\d{2}-\d{2}$/)) {
-        allDates.push({ date: isoDate, index: match.index, nearKeyword });
-      }
+    const monthNum = parseInt(month, 10);
+    if (monthNum >= 1 && monthNum <= 12) {
+      dates.push({ date: `${year}-${month}-${day}`, index: match.index });
     }
   }
 
-  if (allDates.length === 0) return null;
+  while ((match = isoPattern.exec(text)) !== null) {
+    const year = match[1];
+    const month = match[2].padStart(2, "0");
+    const day = match[3].padStart(2, "0");
 
-  const keywordDates = allDates.filter((d) => d.nearKeyword);
-  if (keywordDates.length > 0) {
-    return type === "issue" ? keywordDates[0].date : keywordDates[keywordDates.length - 1].date;
+    const monthNum = parseInt(month, 10);
+    if (monthNum >= 1 && monthNum <= 12) {
+      dates.push({ date: `${year}-${month}-${day}`, index: match.index });
+    }
   }
 
-  return allDates[allDates.length - 1].date;
+  if (dates.length > 0) {
+    return dates[dates.length - 1].date;
+  }
+
+  return null;
 }
 
 // =============================================================================
-// 4. CALCULATE EXPIRY
+// 4. CALCULATE EXPIRY (Issue Date + 3 Years)
 // =============================================================================
 function calculateExpiry(dateIssued: string): string {
-  if (!dateIssued) return "";
+  if (!dateIssued || !dateIssued.match(/^\d{4}-\d{2}-\d{2}$/)) return "";
   try {
     const parts = dateIssued.split("-");
-    if (parts.length === 3) {
-      const year = parseInt(parts[0], 10) + 3;
-      return `${year}-${parts[1]}-${parts[2]}`;
-    }
-  } catch (e) {
-    console.warn("Could not calculate expiry:", e);
+    const year = parseInt(parts[0], 10) + 3;
+    return `${year}-${parts[1]}-${parts[2]}`;
+  } catch {
+    return "";
   }
-  return "";
 }
 
 // =============================================================================
-// 5. APPLY BUSINESS LOGIC
+// 5. APPLY BUSINESS LOGIC (Master List + Dedup Fix)
 // =============================================================================
 function applyBusinessLogic(data: any, fullText: string): any {
   const cert = (data.certification || "").toLowerCase();
@@ -148,19 +154,14 @@ function applyBusinessLogic(data: any, fullText: string): any {
 
   // Country inference
   if (!data.country || data.country === "Unknown" || data.country === "") {
-    const inferredCountry = inferCountry(fullText);
+    const inferredCountry = inferCountry(fullText, data.supplier_name || "");
     if (inferredCountry) data.country = inferredCountry;
   }
 
-  // Date extraction
-  if (!data.date_issued || data.date_issued === "" || data.date_issued === "null") {
-    const extractedDate = extractDateFromText(fullText, "issue");
+  // Date fallback
+  if (!data.date_issued || data.date_issued === "null" || data.date_issued === "") {
+    const extractedDate = extractDateFromText(fullText);
     if (extractedDate) data.date_issued = extractedDate;
-  }
-
-  if (!data.date_expired || data.date_expired === "" || data.date_expired === "null") {
-    const extractedExpiry = extractDateFromText(fullText, "expiry");
-    if (extractedExpiry) data.date_expired = extractedExpiry;
   }
 
   // GLOVES
@@ -174,7 +175,19 @@ function applyBusinessLogic(data: any, fullText: string): any {
     data.scope = "+";
     data.measure = "EU Regulation 2016/425";
     if (!data.product_category || data.product_category === "Goods") data.product_category = "Gloves";
-    if (!data.date_expired && data.date_issued) data.date_expired = calculateExpiry(data.date_issued);
+
+    // DEDUP FIX: Copy certification to certificate_number
+    if (!data.certificate_number || data.certificate_number === "" || data.certificate_number === "null") {
+      if (textLower.includes("en 455")) data.certificate_number = "EN 455";
+      else if (textLower.includes("en 374")) data.certificate_number = "EN 374";
+      else if (textLower.includes("en 420")) data.certificate_number = "EN 420";
+      else if (data.certification) data.certificate_number = data.certification;
+      else data.certificate_number = "Glove Test Report";
+    }
+
+    if (data.date_issued && (!data.date_expired || data.date_expired === "null")) {
+      data.date_expired = calculateExpiry(data.date_issued);
+    }
     return data;
   }
 
@@ -182,6 +195,7 @@ function applyBusinessLogic(data: any, fullText: string): any {
   if (cert.includes("iso 14001") || cert.includes("14001") || textLower.includes("iso 14001")) {
     data.scope = "!";
     data.measure = "EU Waste Framework Directive (2008/98/EC)";
+    if (!data.certificate_number) data.certificate_number = data.certification || "ISO 14001";
     return data;
   }
 
@@ -189,6 +203,7 @@ function applyBusinessLogic(data: any, fullText: string): any {
   if (cert.includes("iso 45001") || cert.includes("45001") || textLower.includes("iso 45001")) {
     data.scope = "!";
     data.measure = "EU Directive 89/391/EEC";
+    if (!data.certificate_number) data.certificate_number = data.certification || "ISO 45001";
     return data;
   }
 
@@ -196,17 +211,19 @@ function applyBusinessLogic(data: any, fullText: string): any {
   if (cert.includes("iso 27001") || cert.includes("27001")) {
     data.scope = "!";
     data.measure = "EU GDPR";
+    if (!data.certificate_number) data.certificate_number = data.certification || "ISO 27001";
     return data;
   }
 
   // FSC
-  if ((cert.includes("fsc") && !cert.includes("fssc")) || textLower.match(/\bfsc\b/)) {
+  if ((cert.includes("fsc") && !cert.includes("fssc")) || (textLower.includes("fsc") && !textLower.includes("fssc"))) {
     data.scope = "!";
     data.measure = "FSC";
+    if (!data.certificate_number) data.certificate_number = data.certification || "FSC";
     return data;
   }
 
-  // ISO 9001 / BRC / GMP
+  // Factory Certs
   const isFactoryCert =
     cert.includes("iso 9001") || cert.includes("9001") ||
     cert.includes("brc") || cert.includes("brcgs") ||
@@ -218,6 +235,7 @@ function applyBusinessLogic(data: any, fullText: string): any {
     if (!data.measure || currentMeasure === "" || currentMeasure === "national regulation") {
       data.measure = "(EC) No 2023/2006";
     }
+    if (!data.certificate_number) data.certificate_number = data.certification || "Management Certificate";
     return data;
   }
 
@@ -225,6 +243,7 @@ function applyBusinessLogic(data: any, fullText: string): any {
   if (cert.includes("10/2011") || textLower.includes("10/2011")) {
     data.scope = "+";
     data.measure = "(EC) No 10/2011";
+    if (!data.certificate_number) data.certificate_number = data.certification || "EU 10/2011";
     return data;
   }
 
@@ -232,19 +251,24 @@ function applyBusinessLogic(data: any, fullText: string): any {
   if (cert.includes("en 13432") || cert.includes("compostable") || textLower.includes("en 13432")) {
     data.scope = "+";
     data.measure = "EN 13432";
+    if (!data.certificate_number) data.certificate_number = data.certification || "EN 13432";
     return data;
   }
 
   // DoC / Migration
   const isProductTest =
-    cert.includes("declaration of conformity") || cert.includes("doc") ||
-    cert.includes("migration") || cert.includes("food contact") ||
+    cert.includes("declaration of conformity") || cert.includes("declaration of compliance") ||
+    cert.includes("doc") || cert.includes("migration") || cert.includes("food contact") ||
     textLower.includes("declaration of conformity") || textLower.includes("migration");
 
   if (isProductTest) {
     data.scope = "+";
     if (!data.measure || currentMeasure === "" || currentMeasure === "national regulation") {
       data.measure = "(EC) No 1935/2004";
+    }
+    if (!data.certificate_number) data.certificate_number = data.certification || "DoC";
+    if (data.date_issued && (!data.date_expired || data.date_expired === "null")) {
+      data.date_expired = calculateExpiry(data.date_issued);
     }
     return data;
   }
@@ -253,10 +277,14 @@ function applyBusinessLogic(data: any, fullText: string): any {
   if (cert.includes("business license") || textLower.includes("business license")) {
     data.scope = "!";
     data.measure = "National Regulation";
+    if (!data.certificate_number) data.certificate_number = data.certification || "Business License";
     return data;
   }
 
   // Default
+  if (!data.certificate_number || data.certificate_number === "" || data.certificate_number === "null") {
+    data.certificate_number = data.certification || "Certificate";
+  }
   if (!data.scope) data.scope = "!";
   if (!data.measure) data.measure = "National Regulation";
 
@@ -278,7 +306,7 @@ function extractJSON(text: string, fullInput: string): any {
     if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
       data = JSON.parse(cleanText.substring(firstBrace, lastBrace + 1));
     }
-  } catch (e) {
+  } catch {
     console.warn("JSON.parse failed, attempting regex...");
   }
 
@@ -289,6 +317,7 @@ function extractJSON(text: string, fullInput: string): any {
   };
 
   if (!data.supplier_name) data.supplier_name = scavenge("supplier_name");
+  if (!data.certificate_number) data.certificate_number = scavenge("certificate_number");
   if (!data.country) data.country = scavenge("country");
   if (!data.scope) data.scope = scavenge("scope");
   if (!data.measure) data.measure = scavenge("measure");
@@ -301,6 +330,7 @@ function extractJSON(text: string, fullInput: string): any {
 
   return {
     supplier_name: sanitize(data.supplier_name, "Unknown Supplier"),
+    certificate_number: sanitize(data.certificate_number, "Certificate"),
     country: sanitize(data.country, "Unknown"),
     scope: sanitize(data.scope, "!"),
     measure: sanitize(data.measure, "National Regulation"),
@@ -317,6 +347,7 @@ function extractJSON(text: string, fullInput: string): any {
 // =============================================================================
 interface CertificateExtractionResult {
   supplier_name: string;
+  certificate_number: string;
   country: string;
   scope: string;
   measure: string;
@@ -334,20 +365,18 @@ const systemPrompt = `
 You are a Compliance Data Extraction Engine.
 CRITICAL: OUTPUT RAW JSON ONLY. NO MARKDOWN.
 
-### DATE RULES
-- Format: YYYY-MM-DD
-- European: DD.MM.YYYY → "09.10.2024" = October 9th.
-- IGNORE years in regulation names ("2016" in "2016/425").
-- PRIORITIZE dates near: "Date", "Issued", "Signed".
-
-### CLASSIFICATION
-- Gloves (EN 455/374/420): scope="+", measure="EU Regulation 2016/425"
-- ISO 9001/BRC/GMP: scope="!", measure="(EC) No 2023/2006"
-- DoC/Migration: scope="+", measure="(EC) No 1935/2004"
+### EXTRACTION RULES
+- supplier_name: Look for "Applicant", "Manufacturer", company letterhead.
+- certificate_number: Extract the certificate/report number if visible.
+- country: Extract from address. If unclear, return null.
+- certification: The standard name (e.g., "EN 455", "ISO 9001").
+- date_issued: Issue date. Format: YYYY-MM-DD. "09.10.2024" = Oct 9th.
+- date_expired: Expiry date. If not found, return null.
 
 ### OUTPUT
 {
   "supplier_name": "string",
+  "certificate_number": "string or null",
   "country": "string or null",
   "scope": "! or +",
   "measure": "string",
@@ -383,13 +412,13 @@ export async function processWithOpenAI(
         : textContent;
 
       userContent = [
-        { type: "text", text: `Extract compliance data from (${filename || "unknown"}):\n\n${truncatedText}` },
+        { type: "text", text: `Extract certificate data from (${filename || "unknown"}):\n\n${truncatedText}` },
       ];
     } else {
       const imageUrl = base64Image.startsWith("data:") ? base64Image : `data:image/jpeg;base64,${base64Image}`;
       userContent = [
         { type: "image_url", image_url: { url: imageUrl } },
-        { type: "text", text: `Extract compliance data from (${filename || "unknown"}).` },
+        { type: "text", text: `Extract certificate data from (${filename || "unknown"}).` },
       ];
     }
 
@@ -420,6 +449,7 @@ export async function processWithOpenAI(
     if (!rawContent) {
       return {
         supplier_name: "Error: No AI Response",
+        certificate_number: "Error",
         country: "Unknown",
         scope: "!",
         measure: "Manual Review Required",
@@ -436,6 +466,7 @@ export async function processWithOpenAI(
     console.error("Processing Error:", error);
     return {
       supplier_name: "Error: Processing Failed",
+      certificate_number: "Error",
       country: "Unknown",
       scope: "!",
       measure: "Manual Review Required",
