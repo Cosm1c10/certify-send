@@ -17,22 +17,95 @@ const corsHeaders = {
 };
 
 // =============================================================================
-// 1. VALID MEASURES WHITELIST (Only these are allowed)
+// 1. VALID MEASURES WHITELIST (From Compliance Knowledge Base)
 // =============================================================================
 const VALID_MEASURES = [
-  "EU Regulation 2016/425",
-  "EU MDR 2017/745",           // Medical Device Regulation (gloves, medical devices)
-  "(EC) No 2023/2006",
-  "(EC) No 1935/2004",
-  "(EC) No 10/2011",
-  "EU Waste Framework Directive (2008/98/EC)",
-  "EU Directive 89/391/EEC",
-  "EU GDPR",
-  "FSC",
-  "EN 13432",
-  "EN 13430",
+  // Food Contact Materials (FCM)
+  "(EC) No 1935/2004",         // Framework regulation for all FCM
+  "(EC) No 2023/2006",         // GMP for FCM manufacturing
+  "(EC) No 10/2011",           // Plastic materials specific
+  // PPE and Medical Devices
+  "EU Regulation 2016/425",    // PPE Regulation (Gloves)
+  "EU MDR 2017/745",           // Medical Device Regulation
+  // Environmental & Safety
+  "EU Waste Framework Directive (2008/98/EC)",  // ISO 14001
+  "EU Directive 89/391/EEC",   // ISO 45001 Occupational Safety
+  "EU GDPR",                   // ISO 27001 Information Security
+  // Certification Standards
+  "FSC",                       // Forest Stewardship Council
+  "EN 13432",                  // Compostable packaging
+  "EN 13430",                  // Recyclable packaging
+  "EN 14287",                  // Aluminium/Foil for food contact
+  // Measuring Instruments
+  "EU Directive 2014/32/EU",   // Measuring Instruments Directive (MID)
+  // Fallback
   "National Regulation",
 ];
+
+// =============================================================================
+// 1b. CERTIFICATION TO MEASURE MAPPING (From Compliance Knowledge Base)
+// =============================================================================
+const CERT_MEASURE_MAP: Record<string, { measure: string; scope: string }> = {
+  // GMP & Quality Management -> (EC) No 2023/2006 (General !)
+  "iso 9001": { measure: "(EC) No 2023/2006", scope: "!" },
+  "iso 22000": { measure: "(EC) No 2023/2006", scope: "!" },
+  "fssc 22000": { measure: "(EC) No 2023/2006", scope: "!" },
+  "fssc22000": { measure: "(EC) No 2023/2006", scope: "!" },
+  "brc": { measure: "(EC) No 2023/2006", scope: "!" },
+  "brcgs": { measure: "(EC) No 2023/2006", scope: "!" },
+  "haccp": { measure: "(EC) No 2023/2006", scope: "!" },
+  "gmp": { measure: "(EC) No 2023/2006", scope: "!" },
+  "ifs": { measure: "(EC) No 2023/2006", scope: "!" },
+  // Environmental -> EU Waste Framework (General !)
+  "iso 14001": { measure: "EU Waste Framework Directive (2008/98/EC)", scope: "!" },
+  // Occupational Safety -> EU Directive 89/391/EEC (General !)
+  "iso 45001": { measure: "EU Directive 89/391/EEC", scope: "!" },
+  "ohsas 18001": { measure: "EU Directive 89/391/EEC", scope: "!" },
+  // Information Security -> EU GDPR (General !)
+  "iso 27001": { measure: "EU GDPR", scope: "!" },
+  // Forest Certification (General !)
+  "fsc": { measure: "FSC", scope: "!" },
+  "pefc": { measure: "FSC", scope: "!" },
+  // Gloves PPE -> EU Regulation 2016/425 (Specific +)
+  "en 455": { measure: "EU Regulation 2016/425", scope: "+" },
+  "en 374": { measure: "EU Regulation 2016/425", scope: "+" },
+  "en 420": { measure: "EU Regulation 2016/425", scope: "+" },
+  "en 388": { measure: "EU Regulation 2016/425", scope: "+" },
+  "en 16523": { measure: "EU Regulation 2016/425", scope: "+" },
+  "en iso 374": { measure: "EU Regulation 2016/425", scope: "+" },
+  // Compostable -> EN 13432 (Specific +)
+  "en 13432": { measure: "EN 13432", scope: "+" },
+  "din certco": { measure: "EN 13432", scope: "+" },
+  "ok compost": { measure: "EN 13432", scope: "+" },
+  "compostable": { measure: "EN 13432", scope: "+" },
+  // Recyclable -> EN 13430 (Specific +)
+  "en 13430": { measure: "EN 13430", scope: "+" },
+  "recyclass": { measure: "EN 13430", scope: "+" },
+  "recyclable": { measure: "EN 13430", scope: "+" },
+  // Plastics -> (EC) No 10/2011 (Specific +)
+  "eu 10/2011": { measure: "(EC) No 10/2011", scope: "+" },
+  "10/2011": { measure: "(EC) No 10/2011", scope: "+" },
+  // Aluminium -> EN 14287 (Specific +)
+  "en 14287": { measure: "EN 14287", scope: "+" },
+  "en14287": { measure: "EN 14287", scope: "+" },
+  // Measuring Instruments -> EU Directive 2014/32/EU (Specific +)
+  "2014/32": { measure: "EU Directive 2014/32/EU", scope: "+" },
+  "mid": { measure: "EU Directive 2014/32/EU", scope: "+" },
+  "measuring instruments": { measure: "EU Directive 2014/32/EU", scope: "+" },
+  // Food Contact General -> (EC) No 1935/2004 (Specific +)
+  "1935/2004": { measure: "(EC) No 1935/2004", scope: "+" },
+  "declaration of conformity": { measure: "(EC) No 1935/2004", scope: "+" },
+  "declaration of compliance": { measure: "(EC) No 1935/2004", scope: "+" },
+  "doc": { measure: "(EC) No 1935/2004", scope: "+" },
+  "coc": { measure: "(EC) No 1935/2004", scope: "+" },
+  "migration": { measure: "(EC) No 1935/2004", scope: "+" },
+  "food contact": { measure: "(EC) No 1935/2004", scope: "+" },
+  "food grade": { measure: "(EC) No 1935/2004", scope: "+" },
+  // Medical Device -> EU MDR 2017/745 (Specific +)
+  "2017/745": { measure: "EU MDR 2017/745", scope: "+" },
+  "mdr": { measure: "EU MDR 2017/745", scope: "+" },
+  "medical device": { measure: "EU MDR 2017/745", scope: "+" },
+};
 
 // =============================================================================
 // 2. GARBAGE VALUES BLACKLIST
@@ -114,66 +187,39 @@ function validateMeasure(measure: string, certification?: string): string {
 }
 
 // =============================================================================
-// 4b. INFER MEASURE FROM CERTIFICATION (Fallback)
+// 4b. INFER MEASURE FROM CERTIFICATION (Uses CERT_MEASURE_MAP)
 // =============================================================================
 function inferMeasureFromCert(certification?: string): string {
   if (!certification) return "National Regulation";
 
   const cert = certification.toLowerCase();
 
-  // Medical Device Regulation (MDR)
-  if (cert.includes("2017/745") || cert.includes("mdr") || cert.includes("medical device")) {
-    return "EU MDR 2017/745";
+  // Check against comprehensive mapping (priority order matters)
+  // 1. Specific ISO standards first (45001, 14001, 27001 before generic 9001)
+  if (cert.includes("45001")) return "EU Directive 89/391/EEC";
+  if (cert.includes("14001")) return "EU Waste Framework Directive (2008/98/EC)";
+  if (cert.includes("27001")) return "EU GDPR";
+
+  // 2. Check all keys in CERT_MEASURE_MAP
+  for (const [key, value] of Object.entries(CERT_MEASURE_MAP)) {
+    if (cert.includes(key)) {
+      return value.measure;
+    }
   }
 
-  // Gloves (PPE Regulation)
-  if (cert.includes("en 455") || cert.includes("en 374") || cert.includes("en 420") || cert.includes("en 388")) {
-    return "EU Regulation 2016/425";
-  }
-
-  // ISO 45001 - SAFETY (must check BEFORE 9001)
-  if (cert.includes("45001") || cert.includes("iso 45001")) {
-    return "EU Directive 89/391/EEC";
-  }
-
-  // ISO 14001 - Environmental
-  if (cert.includes("14001") || cert.includes("iso 14001")) {
-    return "EU Waste Framework Directive (2008/98/EC)";
-  }
-
-  // ISO 27001 - Information Security
-  if (cert.includes("27001") || cert.includes("iso 27001")) {
-    return "EU GDPR";
-  }
-
-  // ISO 9001 / BRC / GMP
-  if (cert.includes("9001") || cert.includes("brc") || cert.includes("22000") || cert.includes("fssc") || cert.includes("gmp")) {
-    return "(EC) No 2023/2006";
-  }
-
-  // DoC / Migration
-  if (cert.includes("declaration") || cert.includes("doc") || cert.includes("migration") || cert.includes("conformity")) {
-    return "(EC) No 1935/2004";
-  }
-
-  // FSC
-  if (cert.includes("fsc") && !cert.includes("fssc")) {
+  // 3. FSC (careful not to match FSSC)
+  if (cert.match(/\bfsc\b/) && !cert.includes("fssc")) {
     return "FSC";
   }
 
-  // EN 13432 Compostable
-  if (cert.includes("13432") || cert.includes("compostable")) {
-    return "EN 13432";
+  // 4. Generic quality management certs
+  if (cert.includes("9001") || cert.includes("22000") || cert.includes("brc") || cert.includes("haccp")) {
+    return "(EC) No 2023/2006";
   }
 
-  // EN 13430 Recyclable
-  if (cert.includes("13430") || cert.includes("recyclable") || cert.includes("recyclass")) {
-    return "EN 13430";
-  }
-
-  // EU 10/2011
-  if (cert.includes("10/2011")) {
-    return "(EC) No 10/2011";
+  // 5. Analysis Report / Test Report without specific standard -> Food Contact
+  if (cert.includes("analysis report") || cert.includes("test report") || cert.includes("migration")) {
+    return "(EC) No 1935/2004";
   }
 
   return "National Regulation";
@@ -544,46 +590,48 @@ function applyBusinessLogic(data: any, fullText: string): any {
   }
 
   // =========================================================================
-  // STEP 5: CERTIFICATION-BASED MEASURE OVERRIDE (Catches text-first misses)
+  // STEP 5: CERTIFICATION-BASED MEASURE OVERRIDE (Uses CERT_MEASURE_MAP)
   // This runs BEFORE whitelist validation to force correct mappings
   // =========================================================================
   const certLower = (data.certification || "").toLowerCase();
 
-  // ISO 45001 -> Safety (NOT GMP!)
-  if (certLower.includes("45001") || certLower.includes("iso 45001")) {
-    console.log("OVERRIDE: ISO 45001 detected in certification - forcing EU Directive 89/391/EEC");
+  // Priority 1: Specific ISO standards (must check before generic patterns)
+  if (certLower.includes("45001")) {
+    console.log("OVERRIDE: ISO 45001 -> EU Directive 89/391/EEC");
     data.measure = "EU Directive 89/391/EEC";
     data.scope = "!";
   }
-  // ISO 14001 -> Environmental
-  else if (certLower.includes("14001") || certLower.includes("iso 14001")) {
+  else if (certLower.includes("14001")) {
     data.measure = "EU Waste Framework Directive (2008/98/EC)";
     data.scope = "!";
   }
-  // ISO 27001 -> GDPR
-  else if (certLower.includes("27001") || certLower.includes("iso 27001")) {
+  else if (certLower.includes("27001")) {
     data.measure = "EU GDPR";
     data.scope = "!";
   }
-  // FSC (not FSSC!)
+  // Priority 2: FSC (careful not to match FSSC)
   else if (certLower.match(/\bfsc\b/) && !certLower.includes("fssc")) {
     data.measure = "FSC";
     data.scope = "!";
   }
-  // EN 13432 Compostable
-  else if (certLower.includes("13432") || certLower.includes("compostable")) {
-    data.measure = "EN 13432";
-    data.scope = "+";
-  }
-  // EN 13430 Recyclable
-  else if (certLower.includes("13430") || certLower.includes("recyclable")) {
-    data.measure = "EN 13430";
-    data.scope = "+";
-  }
-  // Gloves
-  else if (certLower.includes("en 455") || certLower.includes("en 374") || certLower.includes("en 420") || certLower.includes("en 388")) {
-    data.measure = "EU Regulation 2016/425";
-    data.scope = "+";
+  // Priority 3: Use CERT_MEASURE_MAP for all other patterns
+  else {
+    let matched = false;
+    for (const [key, value] of Object.entries(CERT_MEASURE_MAP)) {
+      if (certLower.includes(key)) {
+        console.log(`OVERRIDE: "${key}" matched -> ${value.measure} (${value.scope})`);
+        data.measure = value.measure;
+        data.scope = value.scope;
+        matched = true;
+        break;
+      }
+    }
+    // Priority 4: Generic quality certs -> GMP
+    if (!matched && (certLower.includes("9001") || certLower.includes("22000") ||
+        certLower.includes("brc") || certLower.includes("haccp"))) {
+      data.measure = "(EC) No 2023/2006";
+      data.scope = "!";
+    }
   }
 
   // STEP 6: Validate measure (must be from whitelist, fallback to cert-based lookup)
@@ -631,37 +679,66 @@ function processAIResponse(rawJSON: any, fullInput: string): any {
 }
 
 // =============================================================================
-// 11. SYSTEM PROMPT (No "string" types - use examples instead)
+// 11. SYSTEM PROMPT (Compliance Knowledge Base Integrated)
 // =============================================================================
-const systemPrompt = `You are a Compliance Data Extraction Engine. Extract certificate data and return ONLY valid JSON.
+const systemPrompt = `You are a Food Contact Materials (FCM) Compliance Data Extraction Engine.
+Extract certificate data from documents in ANY language and return ONLY valid JSON.
 
-RULES:
-- supplier_name: Company name from "Applicant", "Manufacturer", or letterhead
-- certificate_number: The certificate/report number (e.g., "CERT-2024-001")
-- country: Country from address (e.g., "China", "Turkey", "Germany")
-- certification: Standard name (e.g., "ISO 9001", "EN 455", "BRC")
-- product_category: Product description (e.g., "Gloves", "Paper Cups", "Packaging")
-- date_issued: Issue date as YYYY-MM-DD (European: "09.10.2024" = October 9th)
-- date_expired: Expiry date as YYYY-MM-DD, or null if not found
+=== EXTRACTION RULES ===
+- supplier_name: Company name from "Applicant", "Manufacturer", "Holder", or letterhead
+- certificate_number: The certificate/report/document number (e.g., "QC14335Q001", "LNE-38792")
+- country: Country from address (China, Turkey, Serbia, Germany, UK, etc.)
+- certification: Standard/certificate type (e.g., "ISO 9001:2015", "FSSC 22000", "Declaration of Compliance")
+- product_category: Product description (e.g., "Plastic cups", "Paper packaging", "Gloves")
+- date_issued: Issue date as YYYY-MM-DD (European format: "09.10.2024" = October 9th, NOT September 10th)
+- date_expired: Expiry date as YYYY-MM-DD, or null if "validity until revocation" or not specified
 
-CLASSIFICATION:
-- Gloves (EN 455/374/420): scope="+", measure="EU Regulation 2016/425"
-- ISO 9001/BRC/GMP: scope="!", measure="(EC) No 2023/2006"
-- DoC/Migration/1935: scope="+", measure="(EC) No 1935/2004"
+=== SCOPE CLASSIFICATION (CRITICAL) ===
+"!" = GENERAL MEASURE (Facility-wide, applies to all products from manufacturer)
+"+" = SPECIFIC MEASURE (Product-specific, applies only to listed products)
 
-IMPORTANT: Never output the word "string" as a value. Extract actual data or use null.
+=== MEASURE MAPPINGS (Use EXACTLY these values) ===
+GENERAL MEASURES (!):
+- ISO 9001, ISO 22000, FSSC 22000, BRC, BRCGS, HACCP, GMP, IFS → "(EC) No 2023/2006"
+- ISO 14001 (Environmental) → "EU Waste Framework Directive (2008/98/EC)"
+- ISO 45001, OHSAS 18001 (Safety) → "EU Directive 89/391/EEC"
+- ISO 27001 (Information Security) → "EU GDPR"
+- FSC, PEFC (Forest certification) → "FSC"
+
+SPECIFIC MEASURES (+):
+- Declaration of Conformity, DoC, CoC, Migration Report, Food Contact, 1935/2004 → "(EC) No 1935/2004"
+- Plastic materials, EU 10/2011, Specific Migration → "(EC) No 10/2011"
+- EN 455, EN 374, EN 420, EN 388 (Gloves PPE) → "EU Regulation 2016/425"
+- EN 13432, DIN CERTCO, OK Compost (Compostable) → "EN 13432"
+- EN 13430, RecyClass (Recyclable) → "EN 13430"
+- EN 14287 (Aluminium/Foil) → "EN 14287"
+- EU MDR 2017/745, Medical Device → "EU MDR 2017/745"
+- EU 2014/32/EU, MID, Measuring Instruments → "EU Directive 2014/32/EU"
+
+=== DATE FORMATS (Handle all) ===
+- European: DD.MM.YYYY or DD/MM/YYYY (e.g., "09.10.2024" = October 9th)
+- ISO: YYYY-MM-DD
+- Text: "9 October 2024", "October 9, 2024"
+- Serbian/European: "04.06.2025" = June 4th, 2025
+
+=== CRITICAL RULES ===
+1. NEVER output "string" as a value - extract actual data or use null
+2. For "validity until revocation" documents, set date_expired to null
+3. Look for expiry in: "Valid until", "Expiry", "Date of Expiry", "Gültig bis"
+4. Look for issue in: "Issue date", "Date of issue", "Issued", "Ausstellungsdatum"
+5. Certificate numbers often appear after "Certificate No:", "Report No:", "Cert. No."
 
 Return JSON:
 {
-  "supplier_name": "Actual Company Name",
-  "certificate_number": "CERT-123 or null",
-  "country": "Country Name or null",
-  "scope": "!" or "+",
-  "measure": "Regulation Name",
-  "certification": "Standard Name",
-  "product_category": "Product Description",
-  "date_issued": "2024-01-15 or null",
-  "date_expired": "2027-01-15 or null"
+  "supplier_name": "DIVI d.o.o.",
+  "certificate_number": "QC14335Q001",
+  "country": "Serbia",
+  "scope": "!",
+  "measure": "(EC) No 2023/2006",
+  "certification": "ISO 9001:2015",
+  "product_category": "Plastic packaging",
+  "date_issued": "2025-06-04",
+  "date_expired": "2028-06-03"
 }`;
 
 // =============================================================================
