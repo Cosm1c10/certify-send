@@ -4,9 +4,10 @@ import { Button } from '@/components/ui/button';
 import DropZone from '@/components/DropZone';
 import ReviewTable from '@/components/ReviewTable';
 import MasterFileSync from '@/components/MasterFileSync';
+import NewSuppliersDialog from '@/components/NewSuppliersDialog';
 import { useCertificates } from '@/hooks/useCertificates';
 import { useMasterFile } from '@/hooks/useMasterFile';
-import { exportToExcel } from '@/utils/exportExcel';
+import { exportToExcel, prepareExportData, NewSupplierInfo } from '@/utils/exportExcel';
 import { exportFeederExcel } from '@/utils/exportFeederExcel';
 
 const Index = () => {
@@ -29,13 +30,60 @@ const Index = () => {
 
   const [feederStats, setFeederStats] = useState<{ matched: number; newSuppliers: number } | null>(null);
 
+  // New Suppliers Dialog state
+  const [showNewSuppliersDialog, setShowNewSuppliersDialog] = useState(false);
+  const [detectedNewSuppliers, setDetectedNewSuppliers] = useState<NewSupplierInfo[]>([]);
+  const [pendingExportType, setPendingExportType] = useState<'excel' | 'feeder' | null>(null);
+
+  // Proceed with export after user confirms
+  const proceedWithExport = async () => {
+    setShowNewSuppliersDialog(false);
+
+    if (pendingExportType === 'excel') {
+      try {
+        await exportToExcel(certificates, masterFile.supplierMap);
+      } catch (error) {
+        console.error('Export failed:', error);
+        alert('Failed to export Excel file');
+      }
+    } else if (pendingExportType === 'feeder') {
+      try {
+        const stats = await exportFeederExcel(certificates, masterFile.supplierMap);
+        if (masterFile.isLoaded) {
+          alert(`Feeder file exported!\n\n${stats.matched} suppliers matched from Master File\n${stats.newSuppliers} NEW suppliers (flagged in purple)\n${stats.duplicatesRemoved} duplicates removed`);
+        } else {
+          alert(`Feeder file exported!\n\n${stats.total} certificates\n${stats.duplicatesRemoved} duplicates removed`);
+        }
+      } catch (error) {
+        console.error('Feeder export failed:', error);
+        alert('Failed to export feeder file');
+      }
+    }
+
+    setPendingExportType(null);
+    setDetectedNewSuppliers([]);
+  };
+
   const handleExport = async () => {
     if (certificates.length === 0) {
       alert('No certificates to export');
       return;
     }
+
+    // Check for new suppliers before exporting
+    const { newSuppliers } = prepareExportData(certificates, masterFile.supplierMap);
+
+    if (newSuppliers.length > 0 && masterFile.isLoaded) {
+      // Show warning dialog
+      setDetectedNewSuppliers(newSuppliers);
+      setPendingExportType('excel');
+      setShowNewSuppliersDialog(true);
+      return;
+    }
+
+    // No new suppliers or no master file - proceed directly
     try {
-      await exportToExcel(certificates);
+      await exportToExcel(certificates, masterFile.supplierMap);
     } catch (error) {
       console.error('Export failed:', error);
       alert('Failed to export Excel file');
@@ -47,11 +95,23 @@ const Index = () => {
       alert('No certificates to export');
       return;
     }
+
+    // Check for new suppliers before exporting
+    const { newSuppliers } = prepareExportData(certificates, masterFile.supplierMap);
+
+    if (newSuppliers.length > 0 && masterFile.isLoaded) {
+      // Show warning dialog
+      setDetectedNewSuppliers(newSuppliers);
+      setPendingExportType('feeder');
+      setShowNewSuppliersDialog(true);
+      return;
+    }
+
+    // No new suppliers or no master file - proceed directly
     try {
       const stats = await exportFeederExcel(certificates, masterFile.supplierMap);
       setFeederStats({ matched: stats.matched, newSuppliers: stats.newSuppliers });
 
-      // Show success message with stats
       if (masterFile.isLoaded) {
         alert(`Feeder file exported!\n\n${stats.matched} suppliers matched from Master File\n${stats.newSuppliers} NEW suppliers (flagged in purple)\n${stats.duplicatesRemoved} duplicates removed`);
       } else {
@@ -263,10 +323,23 @@ const Index = () => {
             </div>
 
             {/* Version */}
-            <p className="text-slate-400 text-[10px] sm:text-xs">v1.1</p>
+            <p className="text-slate-400 text-[10px] sm:text-xs">v1.2</p>
           </div>
         </div>
       </footer>
+
+      {/* New Suppliers Warning Dialog */}
+      <NewSuppliersDialog
+        isOpen={showNewSuppliersDialog}
+        newSuppliers={detectedNewSuppliers}
+        onClose={() => {
+          setShowNewSuppliersDialog(false);
+          setPendingExportType(null);
+          setDetectedNewSuppliers([]);
+        }}
+        onProceed={proceedWithExport}
+        hasMasterFile={masterFile.isLoaded}
+      />
     </div>
   );
 };

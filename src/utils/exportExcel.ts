@@ -1,11 +1,32 @@
 import ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
 import { CertificateData } from '@/types/certificate';
+import { DynamicSupplierMap, matchSupplier } from './masterFileParser';
 
 // =============================================================================
 // V7 MASTER FILE EXCEL EXPORTER
 // Implements exact client column structure + "Saurebh Filter" deduplication
+// + NEW SUPPLIER DETECTION for Feeder System integration
 // =============================================================================
+
+/**
+ * Represents a new/unknown supplier not found in the Master File
+ */
+export interface NewSupplierInfo {
+  supplierName: string;
+  fileName: string;
+  certification: string;
+}
+
+/**
+ * Result of preparing export data with supplier matching
+ */
+export interface PrepareExportResult {
+  processedCertificates: CertificateData[];
+  newSuppliers: NewSupplierInfo[];
+  matchedCount: number;
+  duplicatesRemoved: number;
+}
 
 /**
  * Apply the 3-Year Rule for missing expiry dates
@@ -142,7 +163,84 @@ function applySaurabhFilter(certificates: CertificateData[]): CertificateData[] 
   return deduplicated;
 }
 
-export const exportToExcel = async (certificates: CertificateData[]) => {
+/**
+ * PREPARE EXPORT DATA - Separates data processing from file generation
+ *
+ * This function:
+ * 1. Applies Saurebh Filter deduplication
+ * 2. Matches suppliers against the Master File (if provided)
+ * 3. Tracks NEW/UNKNOWN suppliers not in Master File
+ * 4. Returns processed data for export + new supplier warnings
+ */
+export function prepareExportData(
+  certificates: CertificateData[],
+  supplierMap: DynamicSupplierMap = {}
+): PrepareExportResult {
+  // Step 1: Apply deduplication
+  const deduplicated = applySaurabhFilter(certificates);
+  const duplicatesRemoved = certificates.length - deduplicated.length;
+  console.log(`Saurebh Filter: ${certificates.length} -> ${deduplicated.length} certificates`);
+
+  // Step 2: Match against Master File and track new suppliers
+  const hasSupplierMap = Object.keys(supplierMap).length > 0;
+  const newSuppliers: NewSupplierInfo[] = [];
+  const seenNewSuppliers = new Set<string>(); // Avoid duplicate warnings
+  let matchedCount = 0;
+
+  const processedCertificates = deduplicated.map(cert => {
+    if (!hasSupplierMap) {
+      // No Master File loaded - all suppliers are "new"
+      const key = cert.supplierName.toLowerCase().trim();
+      if (!seenNewSuppliers.has(key) && cert.supplierName) {
+        seenNewSuppliers.add(key);
+        newSuppliers.push({
+          supplierName: cert.supplierName,
+          fileName: cert.fileName,
+          certification: cert.certification || 'Unknown',
+        });
+      }
+      return cert;
+    }
+
+    // Match against Master File
+    const result = matchSupplier(cert.supplierName, supplierMap, 0.75);
+
+    if (result.wasMatched) {
+      matchedCount++;
+      // Update supplier name to official Master File name
+      return {
+        ...cert,
+        supplierName: result.matchedName,
+      };
+    } else {
+      // NEW SUPPLIER - not in Master File
+      const key = cert.supplierName.toLowerCase().trim();
+      if (!seenNewSuppliers.has(key) && cert.supplierName) {
+        seenNewSuppliers.add(key);
+        newSuppliers.push({
+          supplierName: cert.supplierName,
+          fileName: cert.fileName,
+          certification: cert.certification || 'Unknown',
+        });
+      }
+      return cert;
+    }
+  });
+
+  console.log(`Supplier matching: ${matchedCount} matched, ${newSuppliers.length} new suppliers detected`);
+
+  return {
+    processedCertificates,
+    newSuppliers,
+    matchedCount,
+    duplicatesRemoved,
+  };
+}
+
+export const exportToExcel = async (
+  certificates: CertificateData[],
+  supplierMap: DynamicSupplierMap = {}
+) => {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'Certificate Analyzer';
   workbook.created = new Date();
@@ -150,11 +248,9 @@ export const exportToExcel = async (certificates: CertificateData[]) => {
   const worksheet = workbook.addWorksheet('Certificates');
 
   // ==========================================================================
-  // STEP 1: Apply "Saurebh Filter" Deduplication
-  // Group by Supplier Name + Certification, keep one with valid expiry
+  // STEP 1: Apply "Saurebh Filter" Deduplication + Supplier Matching
   // ==========================================================================
-  const deduplicated = applySaurabhFilter(certificates);
-  console.log(`Saurebh Filter: ${certificates.length} -> ${deduplicated.length} certificates`);
+  const { processedCertificates: deduplicated } = prepareExportData(certificates, supplierMap);
 
   // ==========================================================================
   // STEP 2: Sort Alphabetically by Supplier Name
