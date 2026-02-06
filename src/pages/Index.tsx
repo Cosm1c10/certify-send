@@ -1,9 +1,13 @@
-import { Download, ShieldCheck, RotateCcw, AlertCircle, FileSearch, Zap, Globe } from 'lucide-react';
+import { useState } from 'react';
+import { Download, ShieldCheck, RotateCcw, AlertCircle, FileSearch, Zap, Globe, FileSpreadsheet } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import DropZone from '@/components/DropZone';
 import ReviewTable from '@/components/ReviewTable';
+import MasterFileSync from '@/components/MasterFileSync';
 import { useCertificates } from '@/hooks/useCertificates';
+import { useMasterFile } from '@/hooks/useMasterFile';
 import { exportToExcel } from '@/utils/exportExcel';
+import { exportFeederExcel } from '@/utils/exportFeederExcel';
 
 const Index = () => {
   const {
@@ -15,6 +19,16 @@ const Index = () => {
     clearCertificates
   } = useCertificates();
 
+  const {
+    masterFile,
+    isLoading: isMasterFileLoading,
+    error: masterFileError,
+    loadMasterFile,
+    clearMasterFile,
+  } = useMasterFile();
+
+  const [feederStats, setFeederStats] = useState<{ matched: number; newSuppliers: number } | null>(null);
+
   const handleExport = async () => {
     if (certificates.length === 0) {
       alert('No certificates to export');
@@ -25,6 +39,27 @@ const Index = () => {
     } catch (error) {
       console.error('Export failed:', error);
       alert('Failed to export Excel file');
+    }
+  };
+
+  const handleExportFeeder = async () => {
+    if (certificates.length === 0) {
+      alert('No certificates to export');
+      return;
+    }
+    try {
+      const stats = await exportFeederExcel(certificates, masterFile.supplierMap);
+      setFeederStats({ matched: stats.matched, newSuppliers: stats.newSuppliers });
+
+      // Show success message with stats
+      if (masterFile.isLoaded) {
+        alert(`Feeder file exported!\n\n${stats.matched} suppliers matched from Master File\n${stats.newSuppliers} NEW suppliers (flagged in purple)\n${stats.duplicatesRemoved} duplicates removed`);
+      } else {
+        alert(`Feeder file exported!\n\n${stats.total} certificates\n${stats.duplicatesRemoved} duplicates removed\n\nTip: Sync with Master File to auto-correct supplier names!`);
+      }
+    } catch (error) {
+      console.error('Feeder export failed:', error);
+      alert('Failed to export feeder file');
     }
   };
 
@@ -112,6 +147,19 @@ const Index = () => {
             isProcessing={isProcessing}
             processingProgress={processingProgress}
           />
+
+          {/* Master File Sync Section */}
+          <div className="mt-4 pt-4 border-t border-gray-200">
+            <MasterFileSync
+              isLoaded={masterFile.isLoaded}
+              isLoading={isMasterFileLoading}
+              error={masterFileError}
+              fileName={masterFile.fileName}
+              totalSuppliers={masterFile.totalSuppliers}
+              onFileSelect={loadMasterFile}
+              onClear={clearMasterFile}
+            />
+          </div>
         </div>
 
         {/* Processing Errors */}
@@ -161,6 +209,17 @@ const Index = () => {
                   <span className="xs:hidden">Clear</span>
                 </Button>
               )}
+              <Button
+                onClick={handleExportFeeder}
+                disabled={certificates.length === 0 || isProcessing}
+                size="sm"
+                variant="outline"
+                className="gap-1.5 sm:gap-2 border-purple-300 text-purple-700 hover:bg-purple-50 font-semibold text-xs sm:text-sm"
+              >
+                <FileSpreadsheet className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                <span className="hidden xs:inline">Export Feeder</span>
+                <span className="xs:hidden">Feeder</span>
+              </Button>
               <Button
                 onClick={handleExport}
                 disabled={certificates.length === 0 || isProcessing}
