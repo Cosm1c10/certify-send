@@ -73,12 +73,13 @@ function calculateDaysToExpiry(expiryDate: string): number | null {
 
 /**
  * Determine status based on expiry date
+ * NOTE: Client's Master File requires "Up to date" (not "Valid") for conditional formatting
  */
 function getStatus(daysToExpiry: number | null): string {
   if (daysToExpiry === null) {
     return 'Unknown';
   }
-  return daysToExpiry < 0 ? 'Expired' : 'Valid';
+  return daysToExpiry < 0 ? 'Expired' : 'Up to date';
 }
 
 /**
@@ -365,7 +366,7 @@ export const exportToExcel = async (
         fgColor: { argb: 'FFFFCCCC' },
       };
       daysCell.font = { bold: true, color: { argb: 'FF9C0006' } };
-    } else if (status === 'Valid') {
+    } else if (status === 'Up to date') {
       // Green for valid
       statusCell.fill = {
         type: 'pattern',
