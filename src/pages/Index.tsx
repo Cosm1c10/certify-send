@@ -11,15 +11,7 @@ import { exportToExcel, prepareExportData, NewSupplierInfo } from '@/utils/expor
 import { exportFeederExcel } from '@/utils/exportFeederExcel';
 
 const Index = () => {
-  const {
-    certificates,
-    isProcessing,
-    processingProgress,
-    processingErrors,
-    analyzeCertificates,
-    clearCertificates
-  } = useCertificates();
-
+  // Master File must be initialized FIRST so we can pass supplierMap to useCertificates
   const {
     masterFile,
     isLoading: isMasterFileLoading,
@@ -27,6 +19,15 @@ const Index = () => {
     loadMasterFile,
     clearMasterFile,
   } = useMasterFile();
+
+  const {
+    certificates,
+    isProcessing,
+    processingProgress,
+    processingErrors,
+    analyzeCertificates,
+    clearCertificates
+  } = useCertificates(masterFile.supplierMap);
 
   const [feederStats, setFeederStats] = useState<{ matched: number; newSuppliers: number } | null>(null);
 

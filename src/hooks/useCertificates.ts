@@ -3,6 +3,7 @@ import { CertificateData } from '@/types/certificate';
 import { supabase } from '@/integrations/supabase/client';
 import { processWithOpenAI } from '@/utils/processWithOpenAI';
 import { FileWithBase64 } from '@/components/DropZone';
+import { DynamicSupplierMap, matchSupplier } from '@/utils/masterFileParser';
 
 interface EdgeFunctionResponse {
   supplier_name: string;
@@ -46,7 +47,10 @@ function determineStatus(expiryDate: string): CertificateData['status'] {
   return expiry >= today ? 'valid' : 'expired';
 }
 
-export const useCertificates = () => {
+export const useCertificates = (supplierMap?: DynamicSupplierMap) => {
+  // Keep a ref so the latest supplierMap is always available inside callbacks
+  const supplierMapRef = useRef<DynamicSupplierMap | undefined>(supplierMap);
+  supplierMapRef.current = supplierMap;
   const [certificates, setCertificates] = useState<CertificateData[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingProgress, setProcessingProgress] = useState<ProcessingProgress>({ current: 0, total: 0 });
@@ -163,9 +167,25 @@ export const useCertificates = () => {
       }
     }
 
-    // ATOMIC UPDATE: Update state ONCE with all new certificates
-    if (newCertificates.length > 0) {
-      setCertificates((prev) => [...prev, ...newCertificates]);
+    // SUPPLIER NAME CORRECTION: Apply Master File matching before saving
+    // This is the "Fuzzy Match Override" — corrects raw AI names to exact Master File names
+    const currentMap = supplierMapRef.current;
+    const mapSize = currentMap ? Object.keys(currentMap).length : 0;
+    console.log(`Supplier correction: ${mapSize} Master File entries available for ${newCertificates.length} certs`);
+    const correctedCertificates = (currentMap && mapSize > 0)
+      ? newCertificates.map(cert => {
+          const result = matchSupplier(cert.supplierName, currentMap, 0.75);
+          if (result.wasMatched && result.matchedName !== cert.supplierName) {
+            console.log(`Supplier corrected: "${cert.supplierName}" → "${result.matchedName}"`);
+            return { ...cert, supplierName: result.matchedName };
+          }
+          return cert;
+        })
+      : newCertificates;
+
+    // ATOMIC UPDATE: Update state ONCE with all corrected certificates
+    if (correctedCertificates.length > 0) {
+      setCertificates((prev) => [...prev, ...correctedCertificates]);
     }
 
     // Cleanup
@@ -183,6 +203,11 @@ export const useCertificates = () => {
     setProcessingErrors([]);
   }, []);
 
+  // Allow external updates to certificates (e.g., supplier name correction)
+  const updateCertificates = useCallback((updater: (prev: CertificateData[]) => CertificateData[]) => {
+    setCertificates(updater);
+  }, []);
+
   return {
     certificates,
     isProcessing,
@@ -190,5 +215,6 @@ export const useCertificates = () => {
     processingErrors,
     analyzeCertificates,
     clearCertificates,
+    updateCertificates,
   };
 };
