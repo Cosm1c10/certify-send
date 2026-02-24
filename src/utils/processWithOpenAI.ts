@@ -642,7 +642,17 @@ interface CertificateExtractionResult {
 // 11. SYSTEM PROMPT (Compliance Knowledge Base Integrated)
 // =============================================================================
 const systemPrompt = `You are a Food Contact Materials (FCM) Compliance Data Extraction Engine.
-Extract certificate data from documents in ANY language and return ONLY valid JSON.
+Extract certificate data from documents and return ONLY valid JSON.
+
+=== PRIORITY ZERO — LANGUAGE RULE (READ THIS FIRST) ===
+The document image may contain MULTIPLE PAGES stitched together vertically. Some certificates have the SAME content repeated in different languages — for example, Chinese on Page 1 and English on Page 2, or vice versa.
+
+YOU MUST:
+1. SCAN THE ENTIRE IMAGE from top to bottom before extracting anything.
+2. LOCATE THE ENGLISH VERSION of the certificate (it may be on Page 2, 3, or 4).
+3. EXTRACT ALL FIELDS (supplier_name, certification, product_category, dates) ONLY from the ENGLISH text.
+4. NEVER return Chinese characters (汉字), Arabic, Cyrillic, or any non-Latin script for supplier_name or product_category.
+5. If the English section shows "Hunan Kyson Tech. Co., Ltd." but the Chinese section shows "湖南妙工环保科技有限公司", you MUST return "Hunan Kyson Tech. Co., Ltd."
 
 === EXTRACTION RULES ===
 - supplier_name: Company name from "Applicant", "Manufacturer", "Holder", or letterhead
@@ -687,7 +697,6 @@ SPECIFIC MEASURES (+):
 3. Look for expiry in: "Valid until", "Expiry", "Date of Expiry", "Gültig bis"
 4. Look for issue in: "Issue date", "Date of issue", "Issued", "Ausstellungsdatum"
 5. Certificate numbers often appear after "Certificate No:", "Report No:", "Cert. No."
-6. LANGUAGE RULE — CRITICAL: The document may contain multiple versions of the same certificate in different languages (e.g., Chinese, then English, then others). You MUST ignore all non-English text. Scroll through the entire provided image and locate the ENGLISH section. Extract "supplier_name", "certification", and "product_category" ONLY from the English text. If the English text is on the 2nd, 3rd, or 4th page of the image, you must find it and use it. DO NOT return Chinese characters under any circumstances.
 
 Return JSON:
 {
