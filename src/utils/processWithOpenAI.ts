@@ -687,7 +687,7 @@ SPECIFIC MEASURES (+):
 3. Look for expiry in: "Valid until", "Expiry", "Date of Expiry", "Gültig bis"
 4. Look for issue in: "Issue date", "Date of issue", "Issued", "Ausstellungsdatum"
 5. Certificate numbers often appear after "Certificate No:", "Report No:", "Cert. No."
-6. LANGUAGE RULE: If the document contains multiple languages (e.g., Chinese on Page 1, English on Page 2), YOU MUST ONLY EXTRACT THE ENGLISH TEXT. Prioritize the English translation for Supplier Name, Product Category, and Certification Name. Never output Chinese characters.
+6. LANGUAGE RULE — CRITICAL: The document may contain multiple versions of the same certificate in different languages (e.g., Chinese, then English, then others). You MUST ignore all non-English text. Scroll through the entire provided image and locate the ENGLISH section. Extract "supplier_name", "certification", and "product_category" ONLY from the English text. If the English text is on the 2nd, 3rd, or 4th page of the image, you must find it and use it. DO NOT return Chinese characters under any circumstances.
 
 Return JSON:
 {

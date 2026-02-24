@@ -3,28 +3,36 @@ import * as pdfjsLib from 'pdfjs-dist';
 // Configure the worker
 pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 
+// =============================================================================
+// SMART SCALING STRATEGY
+// Keeps total pixel count within AI vision limits while maintaining readability
+// =============================================================================
+const MAX_PAGES = 5;
+const SCALE_HIGH = 2.0;   // 1-2 pages: full quality
+const SCALE_LOW = 1.5;    // 3-5 pages: reduced to keep total size manageable
+const JPEG_QUALITY = 0.8; // Optimized for API payload size
+
 /**
- * Converts the first 2 pages of a PDF file to a single stitched Base64 JPEG image.
- * Pages are stacked vertically so the AI can read content from both pages.
+ * Converts up to the first 5 pages of a PDF into a single stitched JPEG image.
+ * Uses Smart Scaling: 2.0x for short docs, 1.5x for longer ones.
+ * Pages are stacked vertically so the AI can read the full document.
  *
  * @param file - The PDF file to convert
- * @param scale - Render scale (default: 2 for good quality)
- * @param quality - JPEG quality (0-1, default: 0.85)
  * @returns Base64 encoded JPEG string (without data URL prefix)
  */
-export async function pdfToImage(
-  file: File,
-  scale: number = 2,
-  quality: number = 0.85
-): Promise<string> {
+export async function pdfToImage(file: File): Promise<string> {
   const arrayBuffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
 
-  const maxPages = Math.min(pdf.numPages, 2);
+  const pageCount = Math.min(pdf.numPages, MAX_PAGES);
+  const scale = pageCount <= 2 ? SCALE_HIGH : SCALE_LOW;
+
+  console.log(`PDF "${file.name}": ${pdf.numPages} total pages, rendering ${pageCount} at scale ${scale}`);
+
   const pageCanvases: { canvas: HTMLCanvasElement; width: number; height: number }[] = [];
 
   // Render each page to its own temporary canvas
-  for (let i = 1; i <= maxPages; i++) {
+  for (let i = 1; i <= pageCount; i++) {
     const page = await pdf.getPage(i);
     const viewport = page.getViewport({ scale });
 
@@ -77,24 +85,20 @@ export async function pdfToImage(
   }
 
   // Convert to JPEG and return Base64 (without the data URL prefix)
-  const dataUrl = mainCanvas.toDataURL('image/jpeg', quality);
+  const dataUrl = mainCanvas.toDataURL('image/jpeg', JPEG_QUALITY);
   const base64 = dataUrl.replace(/^data:image\/jpeg;base64,/, '');
+
+  console.log(`PDF "${file.name}": stitched ${pageCount} pages -> ${(base64.length / 1024).toFixed(0)}KB base64`);
 
   return base64;
 }
 
 /**
- * Converts the first 2 pages of a PDF file to a Base64 data URL
+ * Converts up to the first 5 pages of a PDF file to a Base64 data URL
  * @param file - The PDF file to convert
- * @param scale - Render scale (default: 2 for good quality)
- * @param quality - JPEG quality (0-1, default: 0.85)
  * @returns Full data URL string (e.g., "data:image/jpeg;base64,...")
  */
-export async function pdfToImageDataUrl(
-  file: File,
-  scale: number = 2,
-  quality: number = 0.85
-): Promise<string> {
-  const base64 = await pdfToImage(file, scale, quality);
+export async function pdfToImageDataUrl(file: File): Promise<string> {
+  const base64 = await pdfToImage(file);
   return `data:image/jpeg;base64,${base64}`;
 }
