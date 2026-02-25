@@ -338,17 +338,18 @@ function findInsertionRow(
  * Scan a supplier's row block for an existing certificate that matches the
  * incoming cert. Returns the matching row number, or null if no match.
  *
- * Match criteria (FUZZY — either condition is sufficient):
- *   1. Measure exact match (col 5) AND certification 6-char prefix match (col 6).
- *      This catches AI-generated name variations like
- *      "DIN CERTCO Compostable" ↔ "DIN CERTCO Compostable seedling logo"
- *      while still blocking cross-cert collisions (ISO 14001 ≠ ISO 9001 —
- *      different measure, so they never share the measure equality gate).
- *   2. Filename literal inclusion in Comments (col 15, case-insensitive).
- *      Catches re-uploads of the same PDF regardless of AI name variation.
+ * Match criteria — a row is considered the SAME cert if EITHER is true:
+ *   A. Filename exact substring match in Comments (col 15) — re-upload of the
+ *      same PDF regardless of AI name variation. Takes priority over field match.
+ *   B. ALL THREE of Measure (col 5) + Certification (col 6) + Product Category
+ *      (col 7) align. This prevents "OK Compost for Cups" from matching "OK
+ *      Compost for Containers" — same cert type, different product.
  *
- * Column numbers are hard-coded (5 = Measure, 6 = Certification, 15 = Comments)
- * to prevent data-shift bugs caused by column-map misresolution.
+ *      Cert and Product use substring containment (min 6 chars) to handle AI
+ *      summarization variations. An empty product on either side is treated as
+ *      a wildcard match so legacy rows without a product column still update.
+ *
+ * Column numbers are hard-coded (5/6/7/15) to prevent data-shift bugs.
  */
 function findExistingCertRow(
   ws: ExcelJS.Worksheet,
@@ -358,7 +359,8 @@ function findExistingCertRow(
   overrideAccount: string | undefined,
   incomingCert: string,
   incomingMeasure: string,
-  incomingFileName: string
+  incomingFileName: string,
+  incomingProduct: string
 ): number | null {
   if (!overrideAccount || lastSupplierRow < headerRowNum + 1) return null;
 
@@ -366,6 +368,7 @@ function findExistingCertRow(
   const normInCert    = incomingCert.toLowerCase().trim();
   const normInMeasure = incomingMeasure.toLowerCase().trim();
   const normInFile    = incomingFileName.toLowerCase().trim();
+  const normInProduct = incomingProduct.toLowerCase().trim();
 
   // Find the first row of this supplier's block in col A
   let blockStart = -1;
@@ -383,34 +386,48 @@ function findExistingCertRow(
     const row = ws.getRow(r);
 
     // Hard-coded column indices per the master file column spec:
-    //   col 5 = Measure, col 6 = Certification, col 15 = Comments
-    const existingMeasure = (row.getCell(5).value?.toString() ?? '').toLowerCase().trim();
-    const existingCert    = (row.getCell(6).value?.toString() ?? '').toLowerCase().trim();
-    const comments        = (row.getCell(15).value?.toString() ?? '').toLowerCase();
+    //   col 5 = Measure, col 6 = Certification, col 7 = Product Category, col 15 = Comments
+    const existingMeasure  = (row.getCell(5).value?.toString()  ?? '').toLowerCase().trim();
+    const existingCert     = (row.getCell(6).value?.toString()  ?? '').toLowerCase().trim();
+    const existingProduct  = (row.getCell(7).value?.toString()  ?? '').toLowerCase().trim();
+    const comments         = (row.getCell(15).value?.toString() ?? '').toLowerCase();
 
-    // --- FUZZY cert match: same measure + shared 6-char cert name prefix ---
-    // The prefix gate means "DIN CERTCO Compostable" matches
-    // "DIN CERTCO Compostable seedling logo" (both start with "din ce"),
-    // but "DIN CERTCO Recyclable" does NOT match (starts with "din ce" too,
-    // however the measure equality gate blocks it when measures differ).
-    if (normInCert && existingCert) {
-      const measureMatch     = existingMeasure === normInMeasure;
-      const certPrefixMatch  = existingCert.substring(0, 6) === normInCert.substring(0, 6);
-      if (measureMatch && certPrefixMatch) {
-        console.log(
-          `[findExistingCertRow] Fuzzy cert match at row ${r}: ` +
-          `measure="${existingMeasure}", cert prefix="${existingCert.substring(0, 6)}"`
-        );
-        return r;
-      }
-    }
-
-    // --- Filename literal inclusion in Comments (col 15) ---
+    // --- CRITERION A: Filename exact match in Comments (col 15) ---
+    // The same PDF was re-uploaded → always update this row, regardless of
+    // whether field values have changed.
     if (normInFile && comments.includes(normInFile)) {
       console.log(
         `[findExistingCertRow] Filename match at row ${r}: "${incomingFileName}" in comments`
       );
       return r;
+    }
+
+    // --- CRITERION B: Measure + Cert + Product all align ---
+    // All three must pass so that same-cert-type / different-product rows
+    // (e.g. "OK Compost for Cups" vs "OK Compost for Containers") are NEVER
+    // merged — they must remain separate rows.
+    if (normInCert && existingCert) {
+      const measureMatch = existingMeasure === normInMeasure;
+
+      const isCertMatch = existingCert === normInCert
+        || (existingCert.length > 5 && normInCert.includes(existingCert))
+        || (normInCert.length > 5    && existingCert.includes(normInCert));
+
+      // Empty product on either side → treat as wildcard (legacy rows without
+      // a product entry still get updated rather than duplicated).
+      const isProductMatch = existingProduct === normInProduct
+        || existingProduct === ''
+        || normInProduct === ''
+        || existingProduct.includes(normInProduct)
+        || normInProduct.includes(existingProduct);
+
+      if (measureMatch && isCertMatch && isProductMatch) {
+        console.log(
+          `[findExistingCertRow] Field match at row ${r}: ` +
+          `measure="${existingMeasure}", cert="${existingCert}", product="${existingProduct}"`
+        );
+        return r;
+      }
     }
   }
 
@@ -661,7 +678,31 @@ export async function appendToMasterExcel(
   let insertCount = 0;
   let updateCount = 0;
 
+  // In-memory tracking for this batch run (ACTIONs 2, 3, 4):
+  //   processedCertTypesThisSession — blocks re-inserting the same cert type
+  //     when the user uploads duplicate files in one batch.
+  //   newBlockStartedFor — tracks which new-supplier keys already had their
+  //     first (Account/Name/Country) row written, so subsequent certs for the
+  //     same new supplier get blank A/B/C (visual grouping rule).
+  const processedCertTypesThisSession = new Set<string>();
+  const newBlockStartedFor = new Set<string>();
+
   for (const cert of processedCertificates) {
+    // ACTION 4 — In-session duplicate prevention.
+    // Key includes measure + cert + product category + filename so that
+    // identical files re-uploaded in the same batch are skipped, but two
+    // DIFFERENT products with the same cert type (e.g. OK Compost for Cups
+    // and OK Compost for Containers) get their own keys and are both inserted.
+    const certKey = (cert.measure || '') + '|' + (cert.certification || '')
+      + '|' + (cert.productCategory || '') + '|' + (cert.fileName || '');
+    if (processedCertTypesThisSession.has(certKey)) {
+      console.log(
+        `[appendToMasterExcel] Skipping in-session duplicate: "${certKey}" (${cert.fileName})`
+      );
+      continue;
+    }
+    processedCertTypesThisSession.add(certKey);
+
     const overrideAccount: string | undefined = (cert as any)._matchedAccount || undefined;
 
     // Re-scan each time — previous insertions shift row numbers
@@ -699,9 +740,10 @@ export async function appendToMasterExcel(
         headerRowNum,
         insertAt - 1,         // lastSupplierRow = one before next-insert position
         overrideAccount,
-        cert.certification || '',
-        cert.measure       || '',
-        cert.fileName      || ''
+        cert.certification   || '',
+        cert.measure         || '',
+        cert.fileName        || '',
+        cert.productCategory || ''
       );
 
       if (matchRow !== null) {
@@ -719,15 +761,22 @@ export async function appendToMasterExcel(
         existingRow.getCell(10).value =
           expiryStr ? (parseDateValue(expiryStr) ?? 'No Date') : 'No Date';
 
-        // col 15 (O) — Append filename to existing Comments so history is preserved
+        // col 15 (O) — Append filename + cert number to Comments, but ONLY if
+        // the filename is not already present. Guards against the same file
+        // being re-uploaded and producing "file.pdf | file.pdf" spam.
         const existingComments = existingRow.getCell(15).value?.toString() ?? '';
-        const newEntry = [
-          cert.fileName,
-          cert.certificateNumber ? `Cert #${cert.certificateNumber}` : '',
-        ].filter(Boolean).join(' | ');
-        existingRow.getCell(15).value = existingComments
-          ? `${existingComments} | ${newEntry}`
-          : newEntry || null;
+        const fileAlreadyLogged = cert.fileName
+          ? existingComments.includes(cert.fileName)
+          : false;
+        if (!fileAlreadyLogged) {
+          const newEntry = [
+            cert.fileName,
+            cert.certificateNumber ? `Cert #${cert.certificateNumber}` : '',
+          ].filter(Boolean).join(' | ');
+          existingRow.getCell(15).value = existingComments
+            ? `${existingComments} | ${newEntry}`
+            : newEntry || null;
+        }
 
         // NO alignment or font changes — preserves client's custom cell formatting.
         existingRow.commit();
@@ -807,10 +856,22 @@ export async function appendToMasterExcel(
       newRow.getCell(2).value = '';
       newRow.getCell(3).value = '';
     } else {
-      // New supplier at the bottom — populate A/B/C normally
-      setCell(cols.supplierAccount, overrideAccount     || null);
-      setCell(cols.supplierName,    cert.supplierName   || null);
-      setCell(cols.country,         cert.country        || null);
+      // New supplier at the bottom.
+      // Only the FIRST cert for this supplier in the current batch gets A/B/C.
+      // Subsequent certs for the same supplier (keyed by account or name) get
+      // blank A/B/C so the visual grouping rule is honoured across the whole batch.
+      const supplierKey = overrideAccount || cert.supplierName || '';
+      if (!newBlockStartedFor.has(supplierKey)) {
+        setCell(cols.supplierAccount, overrideAccount     || null);
+        setCell(cols.supplierName,    cert.supplierName   || null);
+        setCell(cols.country,         cert.country        || null);
+        newBlockStartedFor.add(supplierKey);
+      } else {
+        // Not the first row for this new supplier — blank A/B/C
+        newRow.getCell(1).value = '';
+        newRow.getCell(2).value = '';
+        newRow.getCell(3).value = '';
+      }
     }
 
     // col D (Scope): plain string — numFmt '@' in the alignment loop below forces
