@@ -804,12 +804,22 @@ export async function appendToMasterExcel(
       newRow.getCell(colIndex).value = value ?? null;
     };
 
-    // Visual grouping: existing blocks leave A/B/C blank; new suppliers fill all.
+    // Visual grouping rule: only the FIRST row of a supplier block carries
+    // Account (col 1), Name (col 2), Country (col 3). Every subsequent row
+    // inside the same block MUST be strictly blank in those three columns.
+    //
+    // Using "" (empty string) rather than null — ExcelJS may silently skip
+    // writing null on an inserted row that inherited a value from above,
+    // whereas an explicit "" always overwrites the cell with an empty value.
+    // Hard-coded column numbers 1/2/3 are used so the write is not dependent
+    // on the column map resolving correctly.
     if (supplierFound) {
-      setCell(cols.supplierAccount, null);
-      setCell(cols.supplierName,    null);
-      setCell(cols.country,         null);
+      // Existing block — enforce blanks regardless of what was inherited
+      newRow.getCell(1).value = '';
+      newRow.getCell(2).value = '';
+      newRow.getCell(3).value = '';
     } else {
+      // New supplier at the bottom — populate A/B/C normally
       setCell(cols.supplierAccount, overrideAccount     || null);
       setCell(cols.supplierName,    cert.supplierName   || null);
       setCell(cols.country,         cert.country        || null);
