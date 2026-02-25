@@ -66,7 +66,10 @@ const DropZone = ({ onFilesProcess, isProcessing, processingProgress }: DropZone
       canvas: canvas,
     } as Parameters<typeof page.render>[0]).promise;
 
-    return canvas.toDataURL('image/png');
+    // JPEG at 0.85 quality is ~70% smaller than PNG with no meaningful OCR loss.
+    // This prevents "Failed to send a request to the Edge Function" errors on
+    // large/complex PDFs that produce oversized PNG payloads.
+    return canvas.toDataURL('image/jpeg', 0.85);
   }, []);
 
   const processFiles = useCallback(async (files: File[]) => {
