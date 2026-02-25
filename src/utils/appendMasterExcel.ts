@@ -338,37 +338,34 @@ function findInsertionRow(
  * Scan a supplier's row block for an existing certificate that matches the
  * incoming cert. Returns the matching row number, or null if no match.
  *
- * Match criteria (STRICT — either condition is sufficient):
- *   1. Certification exact match: after case-fold + whitespace collapse,
- *      existingCert === incomingCert.  No substring or token fuzzy logic.
- *      Prevents FSC overwriting BPA, ISO 14001 overwriting ISO 9001, etc.
- *   2. Filename exact inclusion: the raw incomingFileName appears literally
- *      (case-insensitive) in the existing row's Comments (col O).
+ * Match criteria (FUZZY — either condition is sufficient):
+ *   1. Measure exact match (col 5) AND certification 6-char prefix match (col 6).
+ *      This catches AI-generated name variations like
+ *      "DIN CERTCO Compostable" ↔ "DIN CERTCO Compostable seedling logo"
+ *      while still blocking cross-cert collisions (ISO 14001 ≠ ISO 9001 —
+ *      different measure, so they never share the measure equality gate).
+ *   2. Filename literal inclusion in Comments (col 15, case-insensitive).
+ *      Catches re-uploads of the same PDF regardless of AI name variation.
  *
- * blockStart is found by scanning col A from headerRowNum+1 for the first row
- * whose account matches. Rows between blockStart and lastSupplierRow are all
- * scanned (including blank-A rows inserted by previous tool runs).
+ * Column numbers are hard-coded (5 = Measure, 6 = Certification, 15 = Comments)
+ * to prevent data-shift bugs caused by column-map misresolution.
  */
 function findExistingCertRow(
   ws: ExcelJS.Worksheet,
   supplierAccountCol: number,
-  certificationCol: number,
-  commentsCol: number,
   headerRowNum: number,
   lastSupplierRow: number,
   overrideAccount: string | undefined,
   incomingCert: string,
+  incomingMeasure: string,
   incomingFileName: string
 ): number | null {
   if (!overrideAccount || lastSupplierRow < headerRowNum + 1) return null;
 
-  // Strict cert normalisation: lowercase + collapse whitespace only.
-  // No stripping of punctuation — "ISO 9001:2015" ≠ "ISO 90012015".
-  const normCert = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
-
-  const normAccount = overrideAccount.toLowerCase().trim();
-  const normInCert  = normCert(incomingCert);
-  const normInFile  = incomingFileName.toLowerCase().trim();
+  const normAccount   = overrideAccount.toLowerCase().trim();
+  const normInCert    = incomingCert.toLowerCase().trim();
+  const normInMeasure = incomingMeasure.toLowerCase().trim();
+  const normInFile    = incomingFileName.toLowerCase().trim();
 
   // Find the first row of this supplier's block in col A
   let blockStart = -1;
@@ -385,26 +382,35 @@ function findExistingCertRow(
   for (let r = blockStart; r <= lastSupplierRow; r++) {
     const row = ws.getRow(r);
 
-    // --- STRICT cert equality ---
-    if (normInCert) {
-      const existingCert = normCert(String(row.getCell(certificationCol).value ?? ''));
-      if (existingCert && existingCert === normInCert) {
+    // Hard-coded column indices per the master file column spec:
+    //   col 5 = Measure, col 6 = Certification, col 15 = Comments
+    const existingMeasure = (row.getCell(5).value?.toString() ?? '').toLowerCase().trim();
+    const existingCert    = (row.getCell(6).value?.toString() ?? '').toLowerCase().trim();
+    const comments        = (row.getCell(15).value?.toString() ?? '').toLowerCase();
+
+    // --- FUZZY cert match: same measure + shared 6-char cert name prefix ---
+    // The prefix gate means "DIN CERTCO Compostable" matches
+    // "DIN CERTCO Compostable seedling logo" (both start with "din ce"),
+    // but "DIN CERTCO Recyclable" does NOT match (starts with "din ce" too,
+    // however the measure equality gate blocks it when measures differ).
+    if (normInCert && existingCert) {
+      const measureMatch     = existingMeasure === normInMeasure;
+      const certPrefixMatch  = existingCert.substring(0, 6) === normInCert.substring(0, 6);
+      if (measureMatch && certPrefixMatch) {
         console.log(
-          `[findExistingCertRow] Exact cert match at row ${r}: "${existingCert}"`
+          `[findExistingCertRow] Fuzzy cert match at row ${r}: ` +
+          `measure="${existingMeasure}", cert prefix="${existingCert.substring(0, 6)}"`
         );
         return r;
       }
     }
 
-    // --- Filename literal inclusion in Comments ---
-    if (normInFile) {
-      const comments = String(row.getCell(commentsCol).value ?? '').toLowerCase();
-      if (comments.includes(normInFile)) {
-        console.log(
-          `[findExistingCertRow] Filename match at row ${r}: "${incomingFileName}" in comments`
-        );
-        return r;
-      }
+    // --- Filename literal inclusion in Comments (col 15) ---
+    if (normInFile && comments.includes(normInFile)) {
+      console.log(
+        `[findExistingCertRow] Filename match at row ${r}: "${incomingFileName}" in comments`
+      );
+      return r;
     }
   }
 
@@ -690,58 +696,40 @@ export async function appendToMasterExcel(
       const matchRow = findExistingCertRow(
         ws,
         cols.supplierAccount ?? 1,
-        cols.certification   ?? 6,
-        cols.comments        ?? 15,
         headerRowNum,
         insertAt - 1,         // lastSupplierRow = one before next-insert position
         overrideAccount,
         cert.certification || '',
+        cert.measure       || '',
         cert.fileName      || ''
       );
 
       if (matchRow !== null) {
-        // Update existing row: I (Issued), J (Date of Expiry), H (Status), K (Days), O (Comments)
+        // Update ONLY the three data columns that change on a re-upload.
+        // Column numbers are hard-coded to prevent data-shift bugs caused by
+        // column-map misresolution. Styling on existingRow is left 100% untouched.
         const existingRow = ws.getRow(matchRow);
 
-        if (cols.issued !== undefined) {
-          existingRow.getCell(cols.issued).value = parseDateValue(cert.issueDate || '');
-        }
-        if (cols.dateOfExpiry !== undefined) {
-          const expiryStr = cert.expiryDate && cert.expiryDate !== 'Not Found'
-            ? cert.expiryDate : '';
-          existingRow.getCell(cols.dateOfExpiry).value =
-            expiryStr ? (parseDateValue(expiryStr) ?? 'No Date') : 'No Date';
-        }
+        // col 9 (I) — Issued date
+        existingRow.getCell(9).value = parseDateValue(cert.issueDate || '');
 
-        // ACTION 4: Refresh H (Status) and K (Days to Expire) formula + result.
-        // Injecting `result` means Excel shows the correct value in Protected View
-        // and before the user triggers a recalculation.
-        const kCol     = cols.daysToExpire ?? 11;
-        const hCol     = cols.status       ?? 8;
-        const kCell    = existingRow.getCell(kCol);
-        const hCell    = existingRow.getCell(hCol);
-        const kFormula = kCell.type === ExcelJS.ValueType.Formula ? kCell.formula : undefined;
-        const hFormula = hCell.type === ExcelJS.ValueType.Formula ? hCell.formula : undefined;
+        // col 10 (J) — Date of Expiry
+        const expiryStr = cert.expiryDate && cert.expiryDate !== 'Not Found'
+          ? cert.expiryDate : '';
+        existingRow.getCell(10).value =
+          expiryStr ? (parseDateValue(expiryStr) ?? 'No Date') : 'No Date';
 
-        if (expiryForCalc && typeof calculatedDays === 'number') {
-          // Valid expiry: inject pre-calculated days + status as result
-          if (kFormula) kCell.value = { formula: kFormula, result: calculatedDays };
-          if (hFormula) hCell.value = { formula: hFormula, result: calculatedStatus };
-        } else {
-          // "No Date" path: blank result to prevent #VALUE! showing in Protected View
-          if (kFormula) kCell.value = { formula: kFormula, result: '' };
-          if (hFormula) hCell.value = { formula: hFormula, result: '' };
-        }
+        // col 15 (O) — Append filename to existing Comments so history is preserved
+        const existingComments = existingRow.getCell(15).value?.toString() ?? '';
+        const newEntry = [
+          cert.fileName,
+          cert.certificateNumber ? `Cert #${cert.certificateNumber}` : '',
+        ].filter(Boolean).join(' | ');
+        existingRow.getCell(15).value = existingComments
+          ? `${existingComments} | ${newEntry}`
+          : newEntry || null;
 
-        if (cols.comments !== undefined) {
-          const parts: string[] = [];
-          if (cert.fileName)          parts.push(cert.fileName);
-          if (cert.certificateNumber) parts.push(`Cert #${cert.certificateNumber}`);
-          existingRow.getCell(cols.comments).value = parts.join(' | ') || null;
-        }
-        // Smart alignment: center data/date columns, left-align text-heavy columns.
-        // Col 4 (Scope) also gets numFmt '@' + uniform red font.
-        applySmartAlignment(existingRow);
+        // NO alignment or font changes — preserves client's custom cell formatting.
         existingRow.commit();
         updateCount++;
         console.log(
