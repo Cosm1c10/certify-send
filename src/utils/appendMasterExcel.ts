@@ -538,6 +538,46 @@ async function expandSharedFormulas(buffer: ArrayBuffer): Promise<ArrayBuffer> {
 }
 
 // -----------------------------------------------------------------------------
+// Smart alignment helper
+// -----------------------------------------------------------------------------
+
+/**
+ * Apply column-aware alignment to every cell in a row (cols 1–15).
+ *
+ * Center-aligned columns: 4 (Scope), 8 (Status), 9 (Issued), 10 (Date of Expiry),
+ *   11 (Days to Expire), 13 (Date Request Sent), 14 (Date Received).
+ * All other columns: left-aligned (Supplier Name, Measure, Certification, etc.).
+ *
+ * Col 4 (Scope) additionally receives:
+ *   - numFmt '@'       → forces Excel to store as text, preventing "+" / "!"
+ *                        from being treated as formula operators.
+ *   - font color red   → uniform ARGB 'FFFF0000' regardless of inherited style.
+ */
+function applySmartAlignment(row: ExcelJS.Row): void {
+  const CENTER_COLS = new Set([4, 8, 9, 10, 11, 13, 14]);
+
+  for (let col = 1; col <= 15; col++) {
+    const cell = row.getCell(col);
+
+    cell.alignment = {
+      vertical:   'middle',
+      horizontal: CENTER_COLS.has(col) ? 'center' : 'left',
+      wrapText:   true,
+    };
+
+    if (col === 4) {
+      // Force text format so "+" / "!" are never parsed as formula starters
+      cell.numFmt = '@';
+      // Uniform red font — override any inherited colour from the row above
+      cell.font = {
+        ...(cell.font ?? {}),
+        color: { argb: 'FFFF0000' },
+      };
+    }
+  }
+}
+
+// -----------------------------------------------------------------------------
 // Main export
 // -----------------------------------------------------------------------------
 export async function appendToMasterExcel(
@@ -699,14 +739,9 @@ export async function appendToMasterExcel(
           if (cert.certificateNumber) parts.push(`Cert #${cert.certificateNumber}`);
           existingRow.getCell(cols.comments).value = parts.join(' | ') || null;
         }
-        // ACTION 3: Force center alignment on all 15 data columns
-        for (let c = 1; c <= 15; c++) {
-          existingRow.getCell(c).alignment = {
-            vertical: 'middle',
-            horizontal: 'center',
-            wrapText: true,
-          };
-        }
+        // Smart alignment: center data/date columns, left-align text-heavy columns.
+        // Col 4 (Scope) also gets numFmt '@' + uniform red font.
+        applySmartAlignment(existingRow);
         existingRow.commit();
         updateCount++;
         console.log(
@@ -780,9 +815,9 @@ export async function appendToMasterExcel(
       setCell(cols.country,         cert.country        || null);
     }
 
-    // col D (Scope): write ! or + — prepend apostrophe so Excel stores as text,
-    // preventing "+" / "!" from being interpreted as formula operators.
-    setCell(cols.scope, cert.scope ? ("'" + cert.scope) : null);
+    // col D (Scope): plain string — numFmt '@' in the alignment loop below forces
+    // text storage, so no apostrophe hack needed.
+    setCell(cols.scope, cert.scope || null);
     setCell(cols.measure,         cert.measure         || null);
     setCell(cols.certification,   cert.certification   || null);
     setCell(cols.productCategory, cert.productCategory || null);
@@ -803,14 +838,9 @@ export async function appendToMasterExcel(
     if (cert.certificateNumber) commentParts.push(`Cert #${cert.certificateNumber}`);
     setCell(cols.comments, commentParts.join(' | ') || null);
 
-    // ACTION 3: Force center alignment on all 15 data columns
-    for (let c = 1; c <= 15; c++) {
-      newRow.getCell(c).alignment = {
-        vertical: 'middle',
-        horizontal: 'center',
-        wrapText: true,
-      };
-    }
+    // Smart alignment: center data/date columns, left-align text-heavy columns.
+    // Col 4 (Scope) also gets numFmt '@' + uniform red font.
+    applySmartAlignment(newRow);
     newRow.commit();
     insertCount++;
 
