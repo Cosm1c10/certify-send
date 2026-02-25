@@ -1,5 +1,5 @@
-import { useCallback, useState } from 'react';
-import { Upload, Loader2, FileUp } from 'lucide-react';
+import { useCallback, useRef, useState } from 'react';
+import { Upload, Loader2, FileUp, FolderOpen } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { extractTextFromDocx } from '@/utils/docxReader';
 
@@ -24,6 +24,8 @@ const DropZone = ({ onFilesProcess, isProcessing, processingProgress }: DropZone
   const [isDragging, setIsDragging] = useState(false);
   const [isConverting, setIsConverting] = useState(false);
   const [conversionProgress, setConversionProgress] = useState({ current: 0, total: 0 });
+
+  const folderInputRef = useRef<HTMLInputElement>(null);
 
   // Convert image file directly to base64
   const convertImageToBase64 = useCallback(async (file: File): Promise<string> => {
@@ -161,6 +163,22 @@ const DropZone = ({ onFilesProcess, isProcessing, processingProgress }: DropZone
     e.target.value = '';
   }, [processFiles]);
 
+  // Strip macOS/Windows system files before handing off to processFiles.
+  // processFiles already filters by MIME type, so no further filtering needed here.
+  const handleFolderSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const fileList = e.target.files;
+    if (!fileList || fileList.length === 0) return;
+
+    const files = Array.from(fileList).filter(file => !file.name.startsWith('.'));
+
+    if (files.length > 0) {
+      processFiles(files);
+    } else {
+      alert('No supported files found in the selected folder (PDF, DOCX, JPG, PNG)');
+    }
+    e.target.value = '';
+  }, [processFiles]);
+
   const getProgressText = () => {
     if (isConverting) {
       return `Converting files... ${conversionProgress.current} of ${conversionProgress.total}`;
@@ -196,12 +214,26 @@ const DropZone = ({ onFilesProcess, isProcessing, processingProgress }: DropZone
         (isProcessing || isConverting) && "pointer-events-none"
       )}
     >
+      {/* Standard file picker — covers the entire dropzone for click-to-browse */}
       <input
         type="file"
         accept=".pdf,.jpg,.jpeg,.png,.docx"
         multiple
         onChange={handleFileSelect}
         className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+        disabled={isProcessing || isConverting}
+      />
+
+      {/* Hidden folder picker — triggered only by the "Select Folder" button */}
+      {/* @ts-expect-error webkitdirectory / directory are not in React's InputHTMLAttributes */}
+      <input
+        ref={folderInputRef}
+        type="file"
+        style={{ display: 'none' }}
+        multiple
+        webkitdirectory=""
+        directory=""
+        onChange={handleFolderSelect}
         disabled={isProcessing || isConverting}
       />
 
@@ -244,9 +276,21 @@ const DropZone = ({ onFilesProcess, isProcessing, processingProgress }: DropZone
             <p className="text-sm sm:text-base font-medium text-gray-900">
               {isDragging ? 'Drop your files here' : 'Drop certificates here'}
             </p>
-            <p className="text-xs sm:text-sm text-gray-500 mt-1">
-              or <span className="text-yellow-600 font-medium">tap to browse</span> your files
-            </p>
+            <div className="flex items-center justify-center gap-2 mt-1">
+              <p className="text-xs sm:text-sm text-gray-500">
+                or <span className="text-yellow-600 font-medium">tap to browse</span>
+              </p>
+              <span className="text-gray-300 select-none">·</span>
+              {/* relative z-10 places this button above the invisible overlay input */}
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); folderInputRef.current?.click(); }}
+                className="relative z-10 flex items-center gap-1 text-xs sm:text-sm text-yellow-600 font-medium hover:text-yellow-700 transition-colors"
+              >
+                <FolderOpen className="w-3.5 h-3.5" />
+                Select Folder
+              </button>
+            </div>
           </div>
           <div className="flex items-center gap-2 text-[10px] sm:text-xs text-gray-400">
             <span className="px-1.5 sm:px-2 py-0.5 bg-gray-100 rounded">PDF</span>
