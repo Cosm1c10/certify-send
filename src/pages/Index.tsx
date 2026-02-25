@@ -43,7 +43,10 @@ const Index = () => {
   const [supplierSearchValue, setSupplierSearchValue] = useState('');
   // "Add new supplier" inline-input mode (constant button below the dropdown)
   const [addingNewSupplier, setAddingNewSupplier] = useState(false);
-  const [newSupplierInput, setNewSupplierInput] = useState('');
+  const [newSupplierAccount, setNewSupplierAccount] = useState('');   // short code, e.g. "SOWPAK"
+  const [newSupplierName, setNewSupplierName]       = useState('');   // full name, e.g. "Sowinpak Ltd"
+  // Confirmed account code for the currently selected supplier override
+  const [selectedSupplierAccount, setSelectedSupplierAccount] = useState('');
 
   // New Suppliers Dialog state
   const [showNewSuppliersDialog, setShowNewSuppliersDialog] = useState(false);
@@ -257,8 +260,8 @@ const Index = () => {
                         <span
                           role="button"
                           tabIndex={0}
-                          onClick={(e) => { e.stopPropagation(); setSelectedSupplierOverride(''); }}
-                          onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); setSelectedSupplierOverride(''); } }}
+                          onClick={(e) => { e.stopPropagation(); setSelectedSupplierOverride(''); setSelectedSupplierAccount(''); }}
+                          onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); setSelectedSupplierOverride(''); setSelectedSupplierAccount(''); } }}
                           className="p-0.5 rounded hover:bg-yellow-200 text-yellow-700"
                         >
                           <X className="w-3.5 h-3.5" />
@@ -361,48 +364,65 @@ const Index = () => {
                 plain text input above already serves this purpose).             */}
             {masterFile.isLoaded && (
               addingNewSupplier ? (
-                /* Inline text input + confirm / cancel */
-                <div className="mt-2 flex items-center gap-1.5">
-                  <Input
-                    autoFocus
-                    type="text"
-                    placeholder="New supplier name..."
-                    value={newSupplierInput}
-                    onChange={(e) => setNewSupplierInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && newSupplierInput.trim()) {
-                        setSelectedSupplierOverride(newSupplierInput.trim());
-                        setNewSupplierInput('');
-                        setAddingNewSupplier(false);
-                      }
-                      if (e.key === 'Escape') {
-                        setNewSupplierInput('');
-                        setAddingNewSupplier(false);
-                      }
-                    }}
-                    className="h-8 text-sm flex-1 border-green-300 focus-visible:ring-green-400"
-                  />
-                  <button
-                    type="button"
-                    disabled={!newSupplierInput.trim()}
-                    onClick={() => {
-                      if (newSupplierInput.trim()) {
-                        setSelectedSupplierOverride(newSupplierInput.trim());
-                        setNewSupplierInput('');
-                        setAddingNewSupplier(false);
-                      }
-                    }}
-                    className="h-8 w-8 flex items-center justify-center rounded border border-green-300 text-green-700 hover:bg-green-50 disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
-                  >
-                    <Check className="w-3.5 h-3.5" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => { setNewSupplierInput(''); setAddingNewSupplier(false); }}
-                    className="h-8 w-8 flex items-center justify-center rounded border border-gray-200 text-gray-400 hover:bg-gray-50 flex-shrink-0"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
+                /* Two-field inline form: Account code + Full name */
+                <div className="mt-2 space-y-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <Input
+                      autoFocus
+                      type="text"
+                      placeholder="Account code (e.g. SOWPAK)"
+                      value={newSupplierAccount}
+                      onChange={(e) => setNewSupplierAccount(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Escape') { setNewSupplierAccount(''); setNewSupplierName(''); setAddingNewSupplier(false); } }}
+                      className="h-8 text-sm flex-1 border-green-300 focus-visible:ring-green-400"
+                    />
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <Input
+                      type="text"
+                      placeholder="Full company name (e.g. Sowinpak Ltd)"
+                      value={newSupplierName}
+                      onChange={(e) => setNewSupplierName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && newSupplierAccount.trim() && newSupplierName.trim()) {
+                          setSelectedSupplierOverride(newSupplierName.trim());
+                          setSelectedSupplierAccount(newSupplierAccount.trim());
+                          setNewSupplierAccount('');
+                          setNewSupplierName('');
+                          setAddingNewSupplier(false);
+                        }
+                        if (e.key === 'Escape') {
+                          setNewSupplierAccount('');
+                          setNewSupplierName('');
+                          setAddingNewSupplier(false);
+                        }
+                      }}
+                      className="h-8 text-sm flex-1 border-green-300 focus-visible:ring-green-400"
+                    />
+                    <button
+                      type="button"
+                      disabled={!newSupplierAccount.trim() || !newSupplierName.trim()}
+                      onClick={() => {
+                        if (newSupplierAccount.trim() && newSupplierName.trim()) {
+                          setSelectedSupplierOverride(newSupplierName.trim());
+                          setSelectedSupplierAccount(newSupplierAccount.trim());
+                          setNewSupplierAccount('');
+                          setNewSupplierName('');
+                          setAddingNewSupplier(false);
+                        }
+                      }}
+                      className="h-8 w-8 flex items-center justify-center rounded border border-green-300 text-green-700 hover:bg-green-50 disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
+                    >
+                      <Check className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setNewSupplierAccount(''); setNewSupplierName(''); setAddingNewSupplier(false); }}
+                      className="h-8 w-8 flex items-center justify-center rounded border border-gray-200 text-gray-400 hover:bg-gray-50 flex-shrink-0"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 </div>
               ) : (
                 /* Constant "Add new supplier" button */
@@ -418,15 +438,25 @@ const Index = () => {
             )}
 
             {selectedSupplierOverride && (
-              <p className="text-xs text-yellow-700 mt-1 flex items-center gap-1">
-                <Check className="w-3 h-3" />
-                All uploaded certificates will be assigned to <strong>{selectedSupplierOverride}</strong>
+              <p className="text-xs text-yellow-700 mt-1 flex items-center gap-1 flex-wrap">
+                <Check className="w-3 h-3 flex-shrink-0" />
+                All uploaded certificates will be assigned to{' '}
+                <strong>{selectedSupplierOverride}</strong>
+                {selectedSupplierAccount && (
+                  <span className="text-gray-500 font-normal">
+                    (account: <strong className="text-gray-700">{selectedSupplierAccount}</strong>)
+                  </span>
+                )}
               </p>
             )}
           </div>
 
           <DropZone
-            onFilesProcess={(files) => analyzeCertificates(files, selectedSupplierOverride || undefined)}
+            onFilesProcess={(files) => analyzeCertificates(
+              files,
+              selectedSupplierOverride || undefined,
+              selectedSupplierAccount  || undefined
+            )}
             isProcessing={isProcessing}
             processingProgress={processingProgress}
           />

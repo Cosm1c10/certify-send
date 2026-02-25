@@ -243,12 +243,19 @@ function parseDateValue(dateStr: string): Date | string | null {
 }
 
 /**
- * Find the true last data row by scanning downward from startRow.
- * Stops when 5 consecutive rows are found where BOTH supplierNameCol AND certCol are empty.
- * Returns the last row number that contained data.
+ * Find the true last data row by scanning BACKWARDS from ws.rowCount.
  *
- * Rationale: ws.lastRow returns phantom rows (rows with formatting but no data, e.g. row 10,000).
- * This approach ignores formatting-only rows by requiring data in two independent columns.
+ * Why backwards instead of forwards:
+ *   After expandSharedFormulas(), formula cells throughout the sheet (e.g. rows
+ *   4–847 for Status/Days columns) have ExcelJS value objects even when their
+ *   displayed result is an empty string. A forward scan checking `.value` would
+ *   see these as non-empty and report row 847 (or wherever formulas end) as the
+ *   last data row, pushing new supplier blocks to row 10,000+.
+ *
+ *   Scanning backwards with `cell.text` (the rendered string, not the raw
+ *   value/formula object) correctly treats empty-result formula cells as blank
+ *   and stops at the first row that actually shows visible text in either the
+ *   Supplier Name column or the Certification column.
  */
 function findTrueLastRow(
   ws: ExcelJS.Worksheet,
@@ -256,30 +263,21 @@ function findTrueLastRow(
   certCol: number,
   startRow: number
 ): number {
-  const EMPTY_THRESHOLD = 5;
-  let consecutiveEmpty = 0;
-  let lastDataRow = startRow - 1;
-  const scanLimit = Math.max(ws.rowCount, startRow) + EMPTY_THRESHOLD + 1;
+  const bottom = Math.max(ws.rowCount, startRow);
 
-  for (let r = startRow; r <= scanLimit; r++) {
-    const row = ws.getRow(r);
-    const nameVal = row.getCell(supplierNameCol).value;
-    const certVal = row.getCell(certCol).value;
-
-    const isNameEmpty = nameVal === null || nameVal === undefined || String(nameVal).trim() === '';
-    const isCertEmpty = certVal === null || certVal === undefined || String(certVal).trim() === '';
-
-    if (isNameEmpty && isCertEmpty) {
-      consecutiveEmpty++;
-      if (consecutiveEmpty >= EMPTY_THRESHOLD) break;
-    } else {
-      consecutiveEmpty = 0;
-      lastDataRow = r;
+  for (let r = bottom; r >= startRow; r--) {
+    const row        = ws.getRow(r);
+    const nameText   = (row.getCell(supplierNameCol).text ?? '').trim();
+    const certText   = (row.getCell(certCol).text         ?? '').trim();
+    if (nameText !== '' || certText !== '') {
+      console.log(`[findTrueLastRow] True last data row: ${r}`);
+      return r;
     }
   }
 
-  console.log(`[findTrueLastRow] True last data row: ${lastDataRow}`);
-  return lastDataRow;
+  // No data found at all — return the row just above the first data row
+  console.log(`[findTrueLastRow] No data found; returning startRow - 1 = ${startRow - 1}`);
+  return startRow - 1;
 }
 
 /**
@@ -324,10 +322,12 @@ function findInsertionRow(
     }
   }
 
+  // +2 instead of +1: leaves one blank separator row between the last
+  // existing supplier block and the new one, matching the sheet's visual style.
   console.log(
-    `[findInsertionRow] Supplier "${overrideAccount ?? '(none)'}" not found → inserting at trueLastRow+1 = ${trueLastRow + 1}`
+    `[findInsertionRow] Supplier "${overrideAccount ?? '(none)'}" not found → inserting at trueLastRow+2 = ${trueLastRow + 2}`
   );
-  return { insertAt: trueLastRow + 1, supplierFound: false };
+  return { insertAt: trueLastRow + 2, supplierFound: false };
 }
 
 // -----------------------------------------------------------------------------

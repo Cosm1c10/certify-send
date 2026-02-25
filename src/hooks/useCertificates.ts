@@ -136,7 +136,11 @@ export const useCertificates = (supplierMap?: DynamicSupplierMap) => {
     };
   };
 
-  const analyzeCertificates = useCallback(async (files: FileWithBase64[], supplierOverride?: string) => {
+  const analyzeCertificates = useCallback(async (
+    files: FileWithBase64[],
+    supplierOverride?: string,
+    supplierAccountOverride?: string   // explicit account code for brand-new suppliers
+  ) => {
     // Guard: Prevent double-triggering
     if (files.length === 0) return;
     if (isProcessingRef.current) {
@@ -146,8 +150,13 @@ export const useCertificates = (supplierMap?: DynamicSupplierMap) => {
 
     // Lock processing
     isProcessingRef.current = true;
-    const overrideName = supplierOverride?.trim() || '';
-    console.log(`Starting batch processing for ${files.length} items${overrideName ? ` [Override: "${overrideName}"]` : ''}`);
+    const overrideName    = supplierOverride?.trim()        || '';
+    const overrideAccount = supplierAccountOverride?.trim() || '';
+    console.log(
+      `Starting batch processing for ${files.length} items` +
+      (overrideName    ? ` [Override: "${overrideName}"]`       : '') +
+      (overrideAccount ? ` [Account: "${overrideAccount}"]`     : '')
+    );
 
     setIsProcessing(true);
     setProcessingProgress({ current: 0, total: files.length });
@@ -169,12 +178,19 @@ export const useCertificates = (supplierMap?: DynamicSupplierMap) => {
         // regardless of what the AI extracted (broker/manufacturer workflow)
         if (overrideName) {
           newCertificate.supplierName = overrideName;
-          // Also look up the account code from the Master File for the override name
-          const currentMap = supplierMapRef.current;
-          if (currentMap) {
-            const result = matchSupplier(overrideName, currentMap, 0.75);
-            if (result.wasMatched) {
-              (newCertificate as any)._matchedAccount = result.matchedAccount ?? '';
+
+          if (overrideAccount) {
+            // User typed an explicit account code (new supplier flow) — use it directly
+            // without fuzzy-matching so the exact code lands in col A of the Excel.
+            (newCertificate as any)._matchedAccount = overrideAccount;
+          } else {
+            // Try to find the account code from the Master File for existing suppliers
+            const currentMap = supplierMapRef.current;
+            if (currentMap) {
+              const result = matchSupplier(overrideName, currentMap, 0.75);
+              if (result.wasMatched) {
+                (newCertificate as any)._matchedAccount = result.matchedAccount ?? '';
+              }
             }
           }
         }
