@@ -331,6 +331,87 @@ function findInsertionRow(
 }
 
 // -----------------------------------------------------------------------------
+// Deduplication helper
+// -----------------------------------------------------------------------------
+
+/**
+ * Scan a supplier's row block for an existing certificate that matches the
+ * incoming cert. Returns the matching row number, or null if no match.
+ *
+ * Match criteria (STRICT — either condition is sufficient):
+ *   1. Certification exact match: after case-fold + whitespace collapse,
+ *      existingCert === incomingCert.  No substring or token fuzzy logic.
+ *      Prevents FSC overwriting BPA, ISO 14001 overwriting ISO 9001, etc.
+ *   2. Filename exact inclusion: the raw incomingFileName appears literally
+ *      (case-insensitive) in the existing row's Comments (col O).
+ *
+ * blockStart is found by scanning col A from headerRowNum+1 for the first row
+ * whose account matches. Rows between blockStart and lastSupplierRow are all
+ * scanned (including blank-A rows inserted by previous tool runs).
+ */
+function findExistingCertRow(
+  ws: ExcelJS.Worksheet,
+  supplierAccountCol: number,
+  certificationCol: number,
+  commentsCol: number,
+  headerRowNum: number,
+  lastSupplierRow: number,
+  overrideAccount: string | undefined,
+  incomingCert: string,
+  incomingFileName: string
+): number | null {
+  if (!overrideAccount || lastSupplierRow < headerRowNum + 1) return null;
+
+  // Strict cert normalisation: lowercase + collapse whitespace only.
+  // No stripping of punctuation — "ISO 9001:2015" ≠ "ISO 90012015".
+  const normCert = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
+
+  const normAccount = overrideAccount.toLowerCase().trim();
+  const normInCert  = normCert(incomingCert);
+  const normInFile  = incomingFileName.toLowerCase().trim();
+
+  // Find the first row of this supplier's block in col A
+  let blockStart = -1;
+  for (let r = headerRowNum + 1; r <= lastSupplierRow; r++) {
+    const v = ws.getRow(r).getCell(supplierAccountCol).value;
+    if (v !== null && v !== undefined && String(v).toLowerCase().trim() === normAccount) {
+      blockStart = r;
+      break;
+    }
+  }
+  if (blockStart < 0) return null;
+
+  // Scan blockStart → lastSupplierRow (includes blank-A rows from previous inserts)
+  for (let r = blockStart; r <= lastSupplierRow; r++) {
+    const row = ws.getRow(r);
+
+    // --- STRICT cert equality ---
+    if (normInCert) {
+      const existingCert = normCert(String(row.getCell(certificationCol).value ?? ''));
+      if (existingCert && existingCert === normInCert) {
+        console.log(
+          `[findExistingCertRow] Exact cert match at row ${r}: "${existingCert}"`
+        );
+        return r;
+      }
+    }
+
+    // --- Filename literal inclusion in Comments ---
+    if (normInFile) {
+      const comments = String(row.getCell(commentsCol).value ?? '').toLowerCase();
+      if (comments.includes(normInFile)) {
+        console.log(
+          `[findExistingCertRow] Filename match at row ${r}: "${incomingFileName}" in comments`
+        );
+        return r;
+      }
+    }
+  }
+
+  return null;
+}
+
+// -----------------------------------------------------------------------------
 // Shared formula expansion
 // -----------------------------------------------------------------------------
 
@@ -502,33 +583,37 @@ export async function appendToMasterExcel(
     return undefined;
   };
 
-  // Intentionally NOT written to: status (H), daysToExpire (K).
-  // scope (D) is now written — ground truth mapping provides accurate ! / + values.
-  // daysToExpire is mapped only so we can locate col K for formula sourcing.
+  // Intentionally NOT written to as data: status (H), daysToExpire (K).
+  // Both receive formula + pre-calculated result via PASS 2 (Protected View support).
+  // scope (D) is written — ground truth mapping provides accurate ! / + values.
+  // status / daysToExpire are mapped so their column numbers are known for PASS 2.
   const cols = {
     supplierAccount: colIdx(['supplier account', 'account']),
     supplierName:    colIdx(['supplier name', 'supplier']),
     country:         colIdx(['country']),
-    scope:           colIdx(['scope']) ?? 4, // col D — writes ! or + from ground truth
+    scope:           colIdx(['scope'])           ?? 4,  // col D
     measure:         colIdx(['measure']),
     certification:   colIdx(['certification', 'certification ']),
     productCategory: colIdx(['product category', 'product category ']),
+    status:          colIdx(['status'])          ?? 8,  // col H — formula + result only
     issued:          colIdx(['issued', 'date issued', 'issue date']),
     dateOfExpiry:    colIdx(['date of expiry', 'expiry date', 'expiry']),
-    daysToExpire:    colIdx(['days to expire', 'days to expiry']), // read-only: formula sourcing
+    daysToExpire:    colIdx(['days to expire', 'days to expiry']) ?? 11, // col K — formula + result only
     comments:        colIdx(['comments', 'comment']),
   };
 
-  // Step 6: Insert one row per certificate inside the supplier's existing block.
+  // Step 6: For each certificate: update-in-place if a match exists in the
+  // supplier's block, otherwise insert a new row at the bottom of that block.
   //
-  // Uses ws.insertRow() instead of bottom-append so new rows land directly
-  // beneath the supplier's current last row (per rulebook §8).
+  // Update-in-place (ACTION 1): prevents duplicate rows when the same cert is
+  // re-uploaded. Matches on certification keyword similarity OR filename in Comments.
   //
-  // findInsertionRow() re-scans on every iteration so that previous insertions
-  // (which push rows down) are naturally accounted for — no manual offset needed.
-  // findTrueLastRow() inside it ignores phantom rows (formatting-only rows like
-  // row 10,000) by requiring data in both the Supplier Name and Certification
-  // columns for 5 consecutive rows before declaring the data boundary.
+  // Protected View formula results (ACTION 2): pre-calculated Days and Status
+  // values are injected as `result` alongside the formula so Excel displays them
+  // even when the calculation engine is disabled (Protected View, strict mode).
+
+  let insertCount = 0;
+  let updateCount = 0;
 
   for (const cert of processedCertificates) {
     const overrideAccount: string | undefined = (cert as any)._matchedAccount || undefined;
@@ -543,7 +628,96 @@ export async function appendToMasterExcel(
       overrideAccount
     );
 
-    // Insert empty row; ExcelJS pushes all rows from insertAt downward by one.
+    // ── Pre-calculate Status & Days for Protected View ────────────────────────
+    // These are injected as formula `result` so Excel shows them in Protected
+    // View (where the calc engine is blocked) and in fullCalcOnLoad mode.
+    const expiryForCalc = cert.expiryDate && cert.expiryDate !== 'Not Found'
+      ? cert.expiryDate : '';
+    let calculatedDays: number | string = '';
+    let calculatedStatus: string = '';
+    if (expiryForCalc) {
+      const expiryMs = new Date(expiryForCalc).getTime();
+      if (!isNaN(expiryMs)) {
+        const days = Math.floor((expiryMs - Date.now()) / (1000 * 60 * 60 * 24));
+        calculatedDays  = days;
+        calculatedStatus = days < 0 ? 'Expired' : 'Up to date';
+      }
+    }
+
+    // ── ACTION 1: Update-in-Place (Deduplication) ─────────────────────────────
+    // Only check for duplicates when we know the supplier already has a block.
+    if (supplierFound) {
+      const matchRow = findExistingCertRow(
+        ws,
+        cols.supplierAccount ?? 1,
+        cols.certification   ?? 6,
+        cols.comments        ?? 15,
+        headerRowNum,
+        insertAt - 1,         // lastSupplierRow = one before next-insert position
+        overrideAccount,
+        cert.certification || '',
+        cert.fileName      || ''
+      );
+
+      if (matchRow !== null) {
+        // Update existing row: I (Issued), J (Date of Expiry), H (Status), K (Days), O (Comments)
+        const existingRow = ws.getRow(matchRow);
+
+        if (cols.issued !== undefined) {
+          existingRow.getCell(cols.issued).value = parseDateValue(cert.issueDate || '');
+        }
+        if (cols.dateOfExpiry !== undefined) {
+          const expiryStr = cert.expiryDate && cert.expiryDate !== 'Not Found'
+            ? cert.expiryDate : '';
+          existingRow.getCell(cols.dateOfExpiry).value =
+            expiryStr ? (parseDateValue(expiryStr) ?? 'No Date') : 'No Date';
+        }
+
+        // ACTION 4: Refresh H (Status) and K (Days to Expire) formula + result.
+        // Injecting `result` means Excel shows the correct value in Protected View
+        // and before the user triggers a recalculation.
+        const kCol     = cols.daysToExpire ?? 11;
+        const hCol     = cols.status       ?? 8;
+        const kCell    = existingRow.getCell(kCol);
+        const hCell    = existingRow.getCell(hCol);
+        const kFormula = kCell.type === ExcelJS.ValueType.Formula ? kCell.formula : undefined;
+        const hFormula = hCell.type === ExcelJS.ValueType.Formula ? hCell.formula : undefined;
+
+        if (expiryForCalc && typeof calculatedDays === 'number') {
+          // Valid expiry: inject pre-calculated days + status as result
+          if (kFormula) kCell.value = { formula: kFormula, result: calculatedDays };
+          if (hFormula) hCell.value = { formula: hFormula, result: calculatedStatus };
+        } else {
+          // "No Date" path: blank result to prevent #VALUE! showing in Protected View
+          if (kFormula) kCell.value = { formula: kFormula, result: '' };
+          if (hFormula) hCell.value = { formula: hFormula, result: '' };
+        }
+
+        if (cols.comments !== undefined) {
+          const parts: string[] = [];
+          if (cert.fileName)          parts.push(cert.fileName);
+          if (cert.certificateNumber) parts.push(`Cert #${cert.certificateNumber}`);
+          existingRow.getCell(cols.comments).value = parts.join(' | ') || null;
+        }
+        // ACTION 3: Force center alignment on all 15 data columns
+        for (let c = 1; c <= 15; c++) {
+          existingRow.getCell(c).alignment = {
+            vertical: 'middle',
+            horizontal: 'center',
+            wrapText: true,
+          };
+        }
+        existingRow.commit();
+        updateCount++;
+        console.log(
+          `[appendToMasterExcel] Updated row ${matchRow} in-place: ` +
+          `"${cert.supplierName}" → "${cert.certification}"`
+        );
+        continue; // ← skip insert
+      }
+    }
+
+    // ── NO MATCH: insert a new row at the bottom of the supplier's block ──────
     ws.insertRow(insertAt, []);
 
     const newRow   = ws.getRow(insertAt);
@@ -556,19 +730,13 @@ export async function appendToMasterExcel(
 
     // PASS 2 — Aggressive formula sourcing for H (Status) and K (Days to Expire).
     //
-    // Problem: multiple consecutive "No Date" rows above the insertion point all
-    // have inactive/empty K formulas, so a limited lookback (e.g. 5 rows) gives
-    // up too early and the new row ends up with no formula at all.
-    //
-    // Fix: scan ALL the way back to headerRowNum + 1 until we find a row whose
-    // col K cell has a live ExcelJS.ValueType.Formula. Once found, pin every cell
-    // reference in every formula on that row to insertAt — correct because H/K
-    // formulas (e.g. IF(J10="No Date","",TODAY()-J10)) only ever reference their
-    // own row number.
-    //
-    // NOTE: { formula: "..." } without result: undefined forces Excel to evaluate
-    // immediately on load, preventing blank cells.
-    const kCol = cols.daysToExpire ?? 11;
+    // Scan ALL the way back to headerRowNum + 1 for a row with a live col K formula
+    // (multiple "No Date" rows might sit above the insertion point, all with empty K).
+    // Once found, pin every formula cell reference to insertAt and inject the
+    // pre-calculated result so Protected View shows numbers without a calc engine.
+    const kCol      = cols.daysToExpire; // already has ?? 11 from cols definition
+    const statusCol = cols.status;       // already has ?? 8
+
     let formulaTemplateIdx = insertAt - 1;
     while (formulaTemplateIdx > headerRowNum + 1) {
       const kCell = ws.getRow(formulaTemplateIdx).getCell(kCol);
@@ -579,41 +747,46 @@ export async function appendToMasterExcel(
 
     formulaTemplateRow.eachCell({ includeEmpty: true }, (templateCell, colNumber) => {
       if (templateCell.type === ExcelJS.ValueType.Formula && templateCell.formula) {
-        // Pin every cell reference (e.g. J10, K10) to the new row number.
-        // Omit result: undefined — Excel recalculates on open via fullCalcOnLoad.
         const pinned = templateCell.formula.replace(
           /([A-Z]+)(\d+)/g,
           (_m, col) => `${col}${insertAt}`
         );
-        newRow.getCell(colNumber).value = { formula: pinned };
+        // Inject pre-calculated result alongside formula.
+        // Excel uses `result` as the displayed value when calc is blocked.
+        if (colNumber === kCol) {
+          newRow.getCell(colNumber).value = { formula: pinned, result: calculatedDays };
+        } else if (colNumber === statusCol) {
+          newRow.getCell(colNumber).value = { formula: pinned, result: calculatedStatus };
+        } else {
+          newRow.getCell(colNumber).value = { formula: pinned };
+        }
       }
     });
 
-    // PASS 3 — Write data values (H and K keep formulas from PASS 2)
+    // PASS 3 — Write data values (H and K keep formula+result from PASS 2)
     const setCell = (colIndex: number | undefined, value: ExcelJS.CellValue | null) => {
       if (colIndex === undefined) return;
       newRow.getCell(colIndex).value = value ?? null;
     };
 
-    // ACTION 1 — Visual grouping: existing supplier blocks leave A/B/C blank
-    // to match the client's Master File style (only the first row of a block
-    // shows the supplier name / account / country). New suppliers get all columns.
+    // Visual grouping: existing blocks leave A/B/C blank; new suppliers fill all.
     if (supplierFound) {
       setCell(cols.supplierAccount, null);
       setCell(cols.supplierName,    null);
       setCell(cols.country,         null);
     } else {
-      setCell(cols.supplierAccount, overrideAccount || null);
-      setCell(cols.supplierName,    cert.supplierName || null);
-      setCell(cols.country,         cert.country      || null);
+      setCell(cols.supplierAccount, overrideAccount     || null);
+      setCell(cols.supplierName,    cert.supplierName   || null);
+      setCell(cols.country,         cert.country        || null);
     }
 
-    // col D (Scope): write ! or + — ground truth mapping guarantees accuracy
-    setCell(cols.scope, cert.scope || null);
+    // col D (Scope): write ! or + — prepend apostrophe so Excel stores as text,
+    // preventing "+" / "!" from being interpreted as formula operators.
+    setCell(cols.scope, cert.scope ? ("'" + cert.scope) : null);
     setCell(cols.measure,         cert.measure         || null);
     setCell(cols.certification,   cert.certification   || null);
     setCell(cols.productCategory, cert.productCategory || null);
-    // col H (Status): NEVER WRITE — formula from PASS 2
+    // col H (Status): formula + result from PASS 2 — never set as plain data
     setCell(cols.issued, parseDateValue(cert.issueDate || ''));
 
     // Expiry rule (§6): "No Date" if not stated — never null/empty
@@ -622,8 +795,7 @@ export async function appendToMasterExcel(
     const expiryValue: ExcelJS.CellValue =
       expiryStr ? (parseDateValue(expiryStr) ?? 'No Date') : 'No Date';
     setCell(cols.dateOfExpiry, expiryValue);
-
-    // col K (Days to Expire): NEVER WRITE — formula from PASS 2
+    // col K (Days to Expire): formula + result from PASS 2 — never set as plain data
 
     // Comments (O): filename + cert number if available
     const commentParts: string[] = [];
@@ -631,17 +803,26 @@ export async function appendToMasterExcel(
     if (cert.certificateNumber) commentParts.push(`Cert #${cert.certificateNumber}`);
     setCell(cols.comments, commentParts.join(' | ') || null);
 
+    // ACTION 3: Force center alignment on all 15 data columns
+    for (let c = 1; c <= 15; c++) {
+      newRow.getCell(c).alignment = {
+        vertical: 'middle',
+        horizontal: 'center',
+        wrapText: true,
+      };
+    }
     newRow.commit();
+    insertCount++;
 
     console.log(
       `[appendToMasterExcel] Inserted row at ${insertAt} for "${cert.supplierName}" ` +
       `(account: ${overrideAccount ?? 'n/a'}, existing block: ${supplierFound}, ` +
-      `formula template row: ${formulaTemplateIdx})`
+      `formula template: row ${formulaTemplateIdx})`
     );
   }
 
   console.log(
-    `[appendToMasterExcel] Inserted ${processedCertificates.length} row(s) into "${ws.name}"`
+    `[appendToMasterExcel] Done — ${insertCount} inserted, ${updateCount} updated in "${ws.name}"`
   );
 
   // Step 7: Update Log (§12)
