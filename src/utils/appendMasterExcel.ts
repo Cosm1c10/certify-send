@@ -242,6 +242,220 @@ function parseDateValue(dateStr: string): Date | string | null {
   return dateStr;
 }
 
+/**
+ * Find the true last data row by scanning downward from startRow.
+ * Stops when 5 consecutive rows are found where BOTH supplierNameCol AND certCol are empty.
+ * Returns the last row number that contained data.
+ *
+ * Rationale: ws.lastRow returns phantom rows (rows with formatting but no data, e.g. row 10,000).
+ * This approach ignores formatting-only rows by requiring data in two independent columns.
+ */
+function findTrueLastRow(
+  ws: ExcelJS.Worksheet,
+  supplierNameCol: number,
+  certCol: number,
+  startRow: number
+): number {
+  const EMPTY_THRESHOLD = 5;
+  let consecutiveEmpty = 0;
+  let lastDataRow = startRow - 1;
+  const scanLimit = Math.max(ws.rowCount, startRow) + EMPTY_THRESHOLD + 1;
+
+  for (let r = startRow; r <= scanLimit; r++) {
+    const row = ws.getRow(r);
+    const nameVal = row.getCell(supplierNameCol).value;
+    const certVal = row.getCell(certCol).value;
+
+    const isNameEmpty = nameVal === null || nameVal === undefined || String(nameVal).trim() === '';
+    const isCertEmpty = certVal === null || certVal === undefined || String(certVal).trim() === '';
+
+    if (isNameEmpty && isCertEmpty) {
+      consecutiveEmpty++;
+      if (consecutiveEmpty >= EMPTY_THRESHOLD) break;
+    } else {
+      consecutiveEmpty = 0;
+      lastDataRow = r;
+    }
+  }
+
+  console.log(`[findTrueLastRow] True last data row: ${lastDataRow}`);
+  return lastDataRow;
+}
+
+/**
+ * Find the row number at which to insert the new certificate row.
+ *
+ * Strategy (§8 rulebook):
+ *   1. Scan col A from headerRow+1 to trueLastRow for rows matching overrideAccount.
+ *   2. If found → insert at lastSupplierRow + 1 (within the supplier's block).
+ *   3. If not found → insert at trueLastRow + 1 (after all existing data).
+ *
+ * Re-scanning on every cert ensures previous insertions (which shift row numbers) are
+ * naturally accounted for without needing manual offset arithmetic.
+ */
+function findInsertionRow(
+  ws: ExcelJS.Worksheet,
+  supplierAccountCol: number,
+  supplierNameCol: number,
+  certCol: number,
+  headerRowNum: number,
+  overrideAccount: string | undefined
+): { insertAt: number; supplierFound: boolean } {
+  const trueLastRow = findTrueLastRow(ws, supplierNameCol, certCol, headerRowNum + 1);
+
+  if (overrideAccount) {
+    const normalizedTarget = overrideAccount.toLowerCase().trim();
+    let lastSupplierRow = -1;
+
+    for (let r = headerRowNum + 1; r <= trueLastRow; r++) {
+      const cellVal = ws.getRow(r).getCell(supplierAccountCol).value;
+      if (cellVal !== null && cellVal !== undefined) {
+        if (String(cellVal).toLowerCase().trim() === normalizedTarget) {
+          lastSupplierRow = r;
+        }
+      }
+    }
+
+    if (lastSupplierRow >= 0) {
+      console.log(
+        `[findInsertionRow] Supplier "${overrideAccount}" last row: ${lastSupplierRow} → inserting at ${lastSupplierRow + 1}`
+      );
+      return { insertAt: lastSupplierRow + 1, supplierFound: true };
+    }
+  }
+
+  console.log(
+    `[findInsertionRow] Supplier "${overrideAccount ?? '(none)'}" not found → inserting at trueLastRow+1 = ${trueLastRow + 1}`
+  );
+  return { insertAt: trueLastRow + 1, supplierFound: false };
+}
+
+// -----------------------------------------------------------------------------
+// Shared formula expansion
+// -----------------------------------------------------------------------------
+
+/**
+ * Expand all shared formulas in a worksheet XML string to standalone formulas.
+ *
+ * Excel's XLSX format uses "shared formulas": one master cell stores the formula
+ * text; every other cell in the range has an empty <f t="shared" si="N"/> clone
+ * that references the master by index. ExcelJS does NOT update shared-formula
+ * ranges when ws.insertRow() is called, so clones in shifted rows lose their
+ * master reference and writeBuffer() throws:
+ *   "Shared Formula master must exist above and or left of clone for cell KN"
+ *
+ * Fix: before loading with ExcelJS, convert every master+clone to an independent
+ * formula with the correct row-shifted formula string, eliminating shared-formula
+ * mechanics entirely.
+ */
+function expandSharedFormulasInXml(xml: string): string {
+  // ── Phase 1: collect masters ──────────────────────────────────────────────
+  // Master element: <f t="shared" ref="K4:K847" si="2">IF(J4="No Date","",…)</f>
+  // inside a <c r="K4" …> element.
+  const masterMap = new Map<number, { baseRow: number; formula: string }>();
+
+  const masterRe = /<f\b([^>]*)>([^<]+)<\/f>/g;
+  let fm: RegExpExecArray | null;
+  while ((fm = masterRe.exec(xml)) !== null) {
+    const attrs = fm[1];
+    if (!attrs.includes('t="shared"')) continue;
+    if (!attrs.includes('ref="'))      continue; // master must have ref=
+    const siM = attrs.match(/si="(\d+)"/);
+    if (!siM) continue;
+
+    const formula  = fm[2].trim();
+    const before   = xml.slice(0, fm.index);
+    const cOpenIdx = before.lastIndexOf('<c ');
+    if (cOpenIdx < 0) continue;
+    const cellSnip = xml.slice(cOpenIdx, cOpenIdx + 120);
+    const rowM     = cellSnip.match(/r="[A-Z]+(\d+)"/);
+    if (!rowM) continue;
+
+    masterMap.set(parseInt(siM[1], 10), {
+      baseRow: parseInt(rowM[1], 10),
+      formula,
+    });
+  }
+
+  if (masterMap.size === 0) return xml;
+
+  let cloneCount = 0;
+
+  // ── Phase 2: replace masters + clones in a single pass ───────────────────
+  const result = xml.replace(
+    /<f\b([^>]*)(?:>([^<]*)<\/f>|\/>)/g,
+    (fullMatch: string, attrs: string, content: string | undefined, offset: number): string => {
+      if (!attrs.includes('t="shared"')) return fullMatch;
+
+      // Master → strip shared attributes, keep formula as standalone
+      if (content !== undefined && attrs.includes('ref="')) {
+        return `<f>${content.trim()}</f>`;
+      }
+
+      // Clone (self-closing) → expand to shifted formula
+      if (content === undefined) {
+        const siM = attrs.match(/si="(\d+)"/);
+        if (!siM) return fullMatch;
+        const master = masterMap.get(parseInt(siM[1], 10));
+        if (!master) return fullMatch;
+
+        const before   = xml.slice(0, offset);
+        const cOpenIdx = before.lastIndexOf('<c ');
+        if (cOpenIdx < 0) return fullMatch;
+        const cellSnip = xml.slice(cOpenIdx, cOpenIdx + 120);
+        const rowM     = cellSnip.match(/r="[A-Z]+(\d+)"/);
+        if (!rowM) return fullMatch;
+
+        const cloneRow = parseInt(rowM[1], 10);
+        const shift    = cloneRow - master.baseRow;
+        cloneCount++;
+        return `<f>${shiftFormulaRow(master.formula, shift)}</f>`;
+      }
+
+      return fullMatch;
+    }
+  );
+
+  console.log(
+    `[expandSharedFormulas] Expanded ${masterMap.size} master(s) + ${cloneCount} clone(s)`
+  );
+  return result;
+}
+
+/**
+ * Pre-process XLSX buffer: expand all shared formulas to standalone formulas.
+ * Prevents "Shared Formula master must exist above and or left of clone" errors
+ * that ExcelJS throws during writeBuffer() when insertRow() has shifted rows.
+ */
+async function expandSharedFormulas(buffer: ArrayBuffer): Promise<ArrayBuffer> {
+  const zip      = await JSZip.loadAsync(buffer);
+  const allPaths = Object.keys(zip.files);
+
+  const wsXmlPaths = allPaths.filter(
+    p => p.startsWith('xl/worksheets/') && p.endsWith('.xml') && !p.includes('_rels')
+  );
+
+  let anyChanged = false;
+  for (const wsPath of wsXmlPaths) {
+    const file = zip.file(wsPath);
+    if (!file) continue;
+    const original = await file.async('string');
+    const patched  = expandSharedFormulasInXml(original);
+    if (patched !== original) {
+      zip.file(wsPath, patched);
+      anyChanged = true;
+      console.log('[expandSharedFormulas] Patched:', wsPath);
+    }
+  }
+
+  if (!anyChanged) {
+    console.log('[expandSharedFormulas] No shared formulas — returning as-is');
+    return buffer;
+  }
+
+  return zip.generateAsync({ type: 'arraybuffer', compression: 'DEFLATE' });
+}
+
 // -----------------------------------------------------------------------------
 // Main export
 // -----------------------------------------------------------------------------
@@ -262,8 +476,13 @@ export async function appendToMasterExcel(
     return;
   }
 
-  // Step 2: Strip drawing XML (4-layer fix — see stripDrawings above)
-  const cleanBuffer = await stripDrawings(originalBuffer);
+  // Step 2: Pre-process XLSX ZIP before ExcelJS loads it:
+  //   2a — Strip drawing XML (prevents 'Anchors' / 'Target' crashes)
+  //   2b — Expand shared formulas to standalone formulas (prevents
+  //         "Shared Formula master must exist above and or left of clone"
+  //         errors that occur when insertRow() shifts shared-formula clones)
+  const noDrawings  = await stripDrawings(originalBuffer);
+  const cleanBuffer = await expandSharedFormulas(noDrawings);
 
   // Step 3: Load with ExcelJS
   const workbook = new ExcelJS.Workbook();
@@ -283,55 +502,114 @@ export async function appendToMasterExcel(
     return undefined;
   };
 
-  // Intentionally NOT mapping: scope (D), status (H), daysToExpire (K)
+  // Intentionally NOT written to: status (H), daysToExpire (K).
+  // scope (D) is now written — ground truth mapping provides accurate ! / + values.
+  // daysToExpire is mapped only so we can locate col K for formula sourcing.
   const cols = {
     supplierAccount: colIdx(['supplier account', 'account']),
     supplierName:    colIdx(['supplier name', 'supplier']),
     country:         colIdx(['country']),
+    scope:           colIdx(['scope']) ?? 4, // col D — writes ! or + from ground truth
     measure:         colIdx(['measure']),
     certification:   colIdx(['certification', 'certification ']),
     productCategory: colIdx(['product category', 'product category ']),
     issued:          colIdx(['issued', 'date issued', 'issue date']),
     dateOfExpiry:    colIdx(['date of expiry', 'expiry date', 'expiry']),
+    daysToExpire:    colIdx(['days to expire', 'days to expiry']), // read-only: formula sourcing
     comments:        colIdx(['comments', 'comment']),
   };
 
-  // Step 6: Append one row per certificate
-  const lastRowNum = ws.lastRow?.number ?? headerRowNum;
-  const templateRow = ws.getRow(lastRowNum);
+  // Step 6: Insert one row per certificate inside the supplier's existing block.
+  //
+  // Uses ws.insertRow() instead of bottom-append so new rows land directly
+  // beneath the supplier's current last row (per rulebook §8).
+  //
+  // findInsertionRow() re-scans on every iteration so that previous insertions
+  // (which push rows down) are naturally accounted for — no manual offset needed.
+  // findTrueLastRow() inside it ignores phantom rows (formatting-only rows like
+  // row 10,000) by requiring data in both the Supplier Name and Certification
+  // columns for 5 consecutive rows before declaring the data boundary.
 
-  for (let i = 0; i < processedCertificates.length; i++) {
-    const cert = processedCertificates[i];
-    const targetRowNum = lastRowNum + 1 + i;
-    const rowShift    = targetRowNum - lastRowNum;
-    const newRow      = ws.getRow(targetRowNum);
+  for (const cert of processedCertificates) {
+    const overrideAccount: string | undefined = (cert as any)._matchedAccount || undefined;
 
-    // PASS 1 — Copy styles from template row (deep-safe clone)
-    templateRow.eachCell({ includeEmpty: true }, (templateCell, colNumber) => {
-      safeCopyStyleAndValidation(templateCell, newRow.getCell(colNumber));
+    // Re-scan each time — previous insertions shift row numbers
+    const { insertAt, supplierFound } = findInsertionRow(
+      ws,
+      cols.supplierAccount ?? 1,
+      cols.supplierName    ?? 2,
+      cols.certification   ?? 6,
+      headerRowNum,
+      overrideAccount
+    );
+
+    // Insert empty row; ExcelJS pushes all rows from insertAt downward by one.
+    ws.insertRow(insertAt, []);
+
+    const newRow   = ws.getRow(insertAt);
+    const aboveRow = ws.getRow(insertAt - 1); // row directly above
+
+    // PASS 1 — Copy styles from the row directly above (deep-safe clone)
+    aboveRow.eachCell({ includeEmpty: true }, (aboveCell, colNumber) => {
+      safeCopyStyleAndValidation(aboveCell, newRow.getCell(colNumber));
     });
 
-    // PASS 2 — Copy formulas from template row, shifting row numbers by rowShift.
-    //   This preserves col H (Status) and col K (Days to Expire) as live formulas.
-    //   Example: IF(J500="No Date","",…) → IF(J501="No Date","",…) for row 501.
-    templateRow.eachCell({ includeEmpty: true }, (templateCell, colNumber) => {
+    // PASS 2 — Aggressive formula sourcing for H (Status) and K (Days to Expire).
+    //
+    // Problem: multiple consecutive "No Date" rows above the insertion point all
+    // have inactive/empty K formulas, so a limited lookback (e.g. 5 rows) gives
+    // up too early and the new row ends up with no formula at all.
+    //
+    // Fix: scan ALL the way back to headerRowNum + 1 until we find a row whose
+    // col K cell has a live ExcelJS.ValueType.Formula. Once found, pin every cell
+    // reference in every formula on that row to insertAt — correct because H/K
+    // formulas (e.g. IF(J10="No Date","",TODAY()-J10)) only ever reference their
+    // own row number.
+    //
+    // NOTE: { formula: "..." } without result: undefined forces Excel to evaluate
+    // immediately on load, preventing blank cells.
+    const kCol = cols.daysToExpire ?? 11;
+    let formulaTemplateIdx = insertAt - 1;
+    while (formulaTemplateIdx > headerRowNum + 1) {
+      const kCell = ws.getRow(formulaTemplateIdx).getCell(kCol);
+      if (kCell.type === ExcelJS.ValueType.Formula && kCell.formula) break;
+      formulaTemplateIdx--;
+    }
+    const formulaTemplateRow = ws.getRow(formulaTemplateIdx);
+
+    formulaTemplateRow.eachCell({ includeEmpty: true }, (templateCell, colNumber) => {
       if (templateCell.type === ExcelJS.ValueType.Formula && templateCell.formula) {
-        const shifted = shiftFormulaRow(templateCell.formula, rowShift);
-        newRow.getCell(colNumber).value = { formula: shifted, result: undefined };
+        // Pin every cell reference (e.g. J10, K10) to the new row number.
+        // Omit result: undefined — Excel recalculates on open via fullCalcOnLoad.
+        const pinned = templateCell.formula.replace(
+          /([A-Z]+)(\d+)/g,
+          (_m, col) => `${col}${insertAt}`
+        );
+        newRow.getCell(colNumber).value = { formula: pinned };
       }
     });
 
-    // PASS 3 — Write data values (overrides template data values for data columns;
-    //   H and K keep their formulas from PASS 2 because we never call setCell on them)
+    // PASS 3 — Write data values (H and K keep formulas from PASS 2)
     const setCell = (colIndex: number | undefined, value: ExcelJS.CellValue | null) => {
       if (colIndex === undefined) return;
       newRow.getCell(colIndex).value = value ?? null;
     };
 
-    setCell(cols.supplierAccount, (cert as any)._matchedAccount || null);
-    setCell(cols.supplierName,    cert.supplierName    || null);
-    setCell(cols.country,         cert.country         || null);
-    // col D (Scope): NEVER WRITE — rulebook §2 & §5
+    // ACTION 1 — Visual grouping: existing supplier blocks leave A/B/C blank
+    // to match the client's Master File style (only the first row of a block
+    // shows the supplier name / account / country). New suppliers get all columns.
+    if (supplierFound) {
+      setCell(cols.supplierAccount, null);
+      setCell(cols.supplierName,    null);
+      setCell(cols.country,         null);
+    } else {
+      setCell(cols.supplierAccount, overrideAccount || null);
+      setCell(cols.supplierName,    cert.supplierName || null);
+      setCell(cols.country,         cert.country      || null);
+    }
+
+    // col D (Scope): write ! or + — ground truth mapping guarantees accuracy
+    setCell(cols.scope, cert.scope || null);
     setCell(cols.measure,         cert.measure         || null);
     setCell(cols.certification,   cert.certification   || null);
     setCell(cols.productCategory, cert.productCategory || null);
@@ -354,32 +632,51 @@ export async function appendToMasterExcel(
     setCell(cols.comments, commentParts.join(' | ') || null);
 
     newRow.commit();
+
+    console.log(
+      `[appendToMasterExcel] Inserted row at ${insertAt} for "${cert.supplierName}" ` +
+      `(account: ${overrideAccount ?? 'n/a'}, existing block: ${supplierFound}, ` +
+      `formula template row: ${formulaTemplateIdx})`
+    );
   }
 
   console.log(
-    `[appendToMasterExcel] Appended ${processedCertificates.length} row(s) to "${ws.name}"`
+    `[appendToMasterExcel] Inserted ${processedCertificates.length} row(s) into "${ws.name}"`
   );
 
   // Step 7: Update Log (§12)
+  // Scan from row 2 until col A is empty — avoids phantom rows that
+  // logSheet.lastRow?.number returns when the sheet has formatting-only rows.
   const logSheet = workbook.getWorksheet('Update Log');
   if (logSheet) {
+    let nextLogRow = 2;
+    while (nextLogRow <= 100_000) {
+      const v = logSheet.getRow(nextLogRow).getCell(1).value;
+      if (v === null || v === undefined || String(v).trim() === '') break;
+      nextLogRow++;
+    }
+
     const now = new Date();
     const timestamp = `${now.toISOString().slice(0, 10)} ${now.toTimeString().slice(0, 5)}`;
     const first = processedCertificates[0];
-    const lastLog = logSheet.lastRow?.number ?? 0;
-    const logRow  = logSheet.getRow(lastLog + 1);
+    const logRow = logSheet.getRow(nextLogRow);
     logRow.getCell(1).value = timestamp;
     logRow.getCell(2).value = (first as any)._matchedAccount || '';
     logRow.getCell(3).value = first.supplierName || '';
     logRow.getCell(4).value = `Inserted ${processedCertificates.length} certificate(s)`;
     logRow.getCell(5).value = 'Appended via Vexos Engine. Expiry rules applied.';
     logRow.commit();
-    console.log(`[appendToMasterExcel] Update Log row added at ${lastLog + 1}`);
+    console.log(`[appendToMasterExcel] Update Log row added at ${nextLogRow}`);
   } else {
     console.warn('[appendToMasterExcel] "Update Log" sheet not found — skipping');
   }
 
   // Step 8: Write and download
+  // Force Excel to recalculate all formulas the moment the file is opened.
+  // Without this, injected H/K formulas show as blank until the user
+  // double-clicks a cell or presses Ctrl+Alt+F9.
+  workbook.calcProperties.fullCalcOnLoad = true;
+
   const buffer = await workbook.xlsx.writeBuffer();
   const blob = new Blob([buffer as ArrayBuffer], {
     type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',

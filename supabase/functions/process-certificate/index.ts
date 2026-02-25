@@ -33,11 +33,12 @@ const VALID_MEASURES = [
   "EU GDPR",                   // ISO 27001 Information Security
   // Certification Standards
   "FSC",                       // Forest Stewardship Council
-  "EN 13432",                  // Compostable packaging
-  "EN 13430",                  // Recyclable packaging
-  "EN 14287",                  // Aluminium/Foil for food contact
+  "EN 13432",                          // Compostable packaging
+  "EN 13430",                          // Recyclable packaging
+  "EN 14287",                          // Aluminium/Foil for food contact
+  "PPWR (Regulation EU 2023/248)",     // Packaging & Packaging Waste Regulation (Recyclass)
   // Measuring Instruments
-  "EU Directive 2014/32/EU",   // Measuring Instruments Directive (MID)
+  "EU Directive 2014/32/EU",           // Measuring Instruments Directive (MID)
   // Fallback
   "National Regulation",
 ];
@@ -80,8 +81,9 @@ const CERT_MEASURE_MAP: Record<string, { measure: string; scope: string }> = {
   "compostable": { measure: "EN 13432", scope: "+" },
   // Recyclable -> EN 13430 (Specific +)
   "en 13430": { measure: "EN 13430", scope: "+" },
-  "recyclass": { measure: "EN 13430", scope: "+" },
   "recyclable": { measure: "EN 13430", scope: "+" },
+  // Recyclass -> PPWR (Regulation EU 2023/248) per ground truth table
+  "recyclass": { measure: "PPWR (Regulation EU 2023/248)", scope: "+" },
   // Plastics -> (EC) No 10/2011 (Specific +)
   "eu 10/2011": { measure: "(EC) No 10/2011", scope: "+" },
   "10/2011": { measure: "(EC) No 10/2011", scope: "+" },
@@ -724,6 +726,33 @@ SPECIFIC MEASURES (+):
 - EN 14287 (Aluminium/Foil) → "EN 14287"
 - EU MDR 2017/745, Medical Device → "EU MDR 2017/745"
 - EU 2014/32/EU, MID, Measuring Instruments → "EU Directive 2014/32/EU"
+
+=== GROUND TRUTH MAPPING TABLE (Authoritative — Overrides All Rules Above) ===
+When identifying the 'certification', 'measure', and 'scope', you MUST use the exact pairings from this list whenever a match is found:
+- ! | (EC) No 2023/2006 | BRCGS
+- ! | (EC) No 2023/2006 | ISO 9001:2015
+- ! | (EC) No 2023/2006 | ISO 22000:2018
+- ! | (EC) No 2023/2006 | FSSC22000
+- ! | EU Waste Framework Directive (2008/98/EC) | ISO14001
+- ! | EU Directive 89/391/EEC | ISO45001
+- ! | EU GDPR | ISO27001
+- ! | FSC | FSC Certificate
+- + | (EC) No 1935/2004 | Migration Test Report
+- + | (EC) No 1935/2004 | Declaration of Conformity (DOC)
+- + | (EC) No 10/2011 | Specific Migration limit for plastic
+- + | EN 13430 | DIN CERTCO Recyclable
+- + | EN 13432 | DIN CERTCO Compostable seedling logo
+- + | EN 13432 | Ok Compost Industrial
+- + | EN 13432 | Ok Compost Home
+- + | PPWR (Regulation EU 2023/248) | Recyclass
+- + | (EC) No 1935/2004 | Microwavable Test Report
+- + | (EC) No 1935/2004 | Dishwasher Safe Test Report
+- + | (EC) No 1935/2004 | EN14287 for Aluminium alloys
+- + | EU Regulation 2016/425 | EU Type examination Certificate - Category III
+- + | EU Regulation 2016/425 | Declaration of Conformity
+- + | EU Regulation 2016/425 | EU Type examination Certificate - Module B
+
+INSTRUCTION: If the document matches one of the certifications above, you MUST output the exact scope (! or +) and measure associated with it in the table. Use the certification name exactly as shown.
 
 === DATE FORMATS (Handle all) ===
 - European: DD.MM.YYYY or DD/MM/YYYY (e.g., "09.10.2024" = October 9th)
