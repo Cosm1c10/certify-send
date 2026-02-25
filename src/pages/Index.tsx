@@ -1,9 +1,9 @@
 import { useState } from 'react';
-import { Download, ShieldCheck, RotateCcw, AlertCircle, FileSearch, Zap, Globe, FileSpreadsheet, ChevronsUpDown, Check, X, UserCheck } from 'lucide-react';
+import { Download, ShieldCheck, RotateCcw, AlertCircle, FileSearch, Zap, Globe, FileSpreadsheet, ChevronsUpDown, Check, X, UserCheck, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from '@/components/ui/command';
 import { cn } from '@/lib/utils';
 import DropZone from '@/components/DropZone';
 import ReviewTable from '@/components/ReviewTable';
@@ -39,6 +39,8 @@ const Index = () => {
   // Supplier override state (broker/manufacturer workflow)
   const [selectedSupplierOverride, setSelectedSupplierOverride] = useState('');
   const [comboboxOpen, setComboboxOpen] = useState(false);
+  // Tracks live search text inside the combobox — used to offer "Add new supplier" option
+  const [supplierSearchValue, setSupplierSearchValue] = useState('');
 
   // New Suppliers Dialog state
   const [showNewSuppliersDialog, setShowNewSuppliersDialog] = useState(false);
@@ -232,7 +234,7 @@ const Index = () => {
 
             {masterFile.isLoaded ? (
               /* Searchable combobox when Master File is loaded */
-              <Popover open={comboboxOpen} onOpenChange={setComboboxOpen}>
+              <Popover open={comboboxOpen} onOpenChange={(open) => { setComboboxOpen(open); if (!open) setSupplierSearchValue(''); }}>
                 <PopoverTrigger asChild>
                   <button
                     type="button"
@@ -245,7 +247,7 @@ const Index = () => {
                     )}
                   >
                     <span className={selectedSupplierOverride ? "text-gray-900 font-medium" : ""}>
-                      {selectedSupplierOverride || "Search supplier from Master File..."}
+                      {selectedSupplierOverride || "Search or add a supplier..."}
                     </span>
                     <div className="flex items-center gap-1 flex-shrink-0 ml-2">
                       {selectedSupplierOverride && (
@@ -265,9 +267,17 @@ const Index = () => {
                 </PopoverTrigger>
                 <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
                   <Command>
-                    <CommandInput placeholder="Search supplier name..." className="h-9" />
+                    <CommandInput
+                      placeholder="Search or type a new supplier name..."
+                      className="h-9"
+                      onValueChange={setSupplierSearchValue}
+                    />
                     <CommandList>
-                      <CommandEmpty>No supplier found.</CommandEmpty>
+                      <CommandEmpty>
+                        {supplierSearchValue.trim()
+                          ? 'No match — use "Add new" below.'
+                          : 'No suppliers found.'}
+                      </CommandEmpty>
                       <CommandGroup>
                         {Object.values(masterFile.supplierMap)
                           .map(e => e.officialName)
@@ -288,6 +298,31 @@ const Index = () => {
                           ))
                         }
                       </CommandGroup>
+
+                      {/* "Add new supplier" option — visible whenever the user has typed
+                          text that isn't an exact match for an existing supplier */}
+                      {supplierSearchValue.trim() &&
+                        !Object.values(masterFile.supplierMap).some(
+                          e => e.officialName.toLowerCase() === supplierSearchValue.toLowerCase().trim()
+                        ) && (
+                        <>
+                          <CommandSeparator />
+                          <CommandGroup>
+                            <CommandItem
+                              value={`add new supplier ${supplierSearchValue}`}
+                              onSelect={() => {
+                                setSelectedSupplierOverride(supplierSearchValue.trim());
+                                setComboboxOpen(false);
+                                setSupplierSearchValue('');
+                              }}
+                              className="text-green-700"
+                            >
+                              <Plus className="mr-2 h-4 w-4 text-green-600 flex-shrink-0" />
+                              Add new: <span className="ml-1 font-semibold">{supplierSearchValue.trim()}</span>
+                            </CommandItem>
+                          </CommandGroup>
+                        </>
+                      )}
                     </CommandList>
                   </Command>
                 </PopoverContent>
