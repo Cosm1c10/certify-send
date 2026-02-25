@@ -339,17 +339,20 @@ function findInsertionRow(
  * incoming cert. Returns the matching row number, or null if no match.
  *
  * Match criteria — a row is considered the SAME cert if EITHER is true:
- *   A. Filename exact substring match in Comments (col 15) — re-upload of the
- *      same PDF regardless of AI name variation. Takes priority over field match.
- *   B. ALL THREE of Measure (col 5) + Certification (col 6) + Product Category
- *      (col 7) align. This prevents "OK Compost for Cups" from matching "OK
- *      Compost for Containers" — same cert type, different product.
  *
- *      Cert and Product use substring containment (min 6 chars) to handle AI
- *      summarization variations. An empty product on either side is treated as
- *      a wildcard match so legacy rows without a product column still update.
+ *   A. FILENAME match in Comments (col 15).
+ *      Tried first with the exact uploaded name, then again with OS copy-markers
+ *      stripped ("cert (1).pdf" → "cert.pdf"). Handles both re-uploads and
+ *      OS-renamed duplicates without requiring any field values to match.
  *
- * Column numbers are hard-coded (5/6/7/15) to prevent data-shift bugs.
+ *   B. CERT NAME containment (bidirectional, min 5 chars) AND PRODUCT match.
+ *      No measure gate — the client's sheet often stores the cert name with a
+ *      long descriptor (e.g. "ISO 9001:2015 (Quality Management System)") while
+ *      the AI extracts just "ISO 9001:2015". Requiring measure equality blocked
+ *      these obvious matches. The product gate still prevents "OK Compost Cups"
+ *      from colliding with "OK Compost Containers".
+ *
+ * Column numbers are hard-coded (6/7/15) to prevent data-shift bugs.
  */
 function findExistingCertRow(
   ws: ExcelJS.Worksheet,
@@ -358,7 +361,7 @@ function findExistingCertRow(
   lastSupplierRow: number,
   overrideAccount: string | undefined,
   incomingCert: string,
-  incomingMeasure: string,
+  incomingMeasure: string,   // kept for future use / logging
   incomingFileName: string,
   incomingProduct: string
 ): number | null {
@@ -366,9 +369,11 @@ function findExistingCertRow(
 
   const normAccount   = overrideAccount.toLowerCase().trim();
   const normInCert    = incomingCert.toLowerCase().trim();
-  const normInMeasure = incomingMeasure.toLowerCase().trim();
   const normInFile    = incomingFileName.toLowerCase().trim();
   const normInProduct = incomingProduct.toLowerCase().trim();
+
+  // Strip OS copy-markers before the extension: "cert (1).pdf" → "cert.pdf"
+  const normInFileCleaned = normInFile.replace(/\s*\(\d+\)(\.\w+)$/, '$1');
 
   // Find the first row of this supplier's block in col A
   let blockStart = -1;
@@ -385,46 +390,48 @@ function findExistingCertRow(
   for (let r = blockStart; r <= lastSupplierRow; r++) {
     const row = ws.getRow(r);
 
-    // Hard-coded column indices per the master file column spec:
-    //   col 5 = Measure, col 6 = Certification, col 7 = Product Category, col 15 = Comments
-    const existingMeasure  = (row.getCell(5).value?.toString()  ?? '').toLowerCase().trim();
-    const existingCert     = (row.getCell(6).value?.toString()  ?? '').toLowerCase().trim();
-    const existingProduct  = (row.getCell(7).value?.toString()  ?? '').toLowerCase().trim();
-    const comments         = (row.getCell(15).value?.toString() ?? '').toLowerCase();
+    // Hard-coded column indices: col 6 = Certification, col 7 = Product Category,
+    // col 15 = Comments. (Measure / col 5 is no longer used as a match gate.)
+    const existingCert    = (row.getCell(6).value?.toString()  ?? '').toLowerCase().trim();
+    const existingProduct = (row.getCell(7).value?.toString()  ?? '').toLowerCase().trim();
+    const comments        = (row.getCell(15).value?.toString() ?? '').toLowerCase();
 
-    // --- CRITERION A: Filename exact match in Comments (col 15) ---
-    // The same PDF was re-uploaded → always update this row, regardless of
-    // whether field values have changed.
+    // --- CRITERION A: Filename in Comments (col 15) ---
+    // Try exact name first; if it was OS-renamed (e.g. " (1)" appended), try
+    // the cleaned version so "cert (1).pdf" still matches "cert.pdf" in comments.
     if (normInFile && comments.includes(normInFile)) {
       console.log(
         `[findExistingCertRow] Filename match at row ${r}: "${incomingFileName}" in comments`
       );
       return r;
     }
+    if (normInFileCleaned !== normInFile && normInFileCleaned && comments.includes(normInFileCleaned)) {
+      console.log(
+        `[findExistingCertRow] Cleaned-filename match at row ${r}: ` +
+        `"${normInFileCleaned}" (from "${incomingFileName}") in comments`
+      );
+      return r;
+    }
 
-    // --- CRITERION B: Measure + Cert + Product all align ---
-    // All three must pass so that same-cert-type / different-product rows
-    // (e.g. "OK Compost for Cups" vs "OK Compost for Containers") are NEVER
-    // merged — they must remain separate rows.
-    if (normInCert && existingCert) {
-      const measureMatch = existingMeasure === normInMeasure;
+    // --- CRITERION B: Cert name containment + Product gate ---
+    // Both the AI name and the sheet name must be at least 5 chars so a
+    // short token ("ISO") never accidentally matches everything.
+    if (normInCert.length >= 5 && existingCert.length >= 5) {
+      const isCertMatch = existingCert.includes(normInCert)
+        || normInCert.includes(existingCert);
 
-      const isCertMatch = existingCert === normInCert
-        || (existingCert.length > 5 && normInCert.includes(existingCert))
-        || (normInCert.length > 5    && existingCert.includes(normInCert));
-
-      // Empty product on either side → treat as wildcard (legacy rows without
-      // a product entry still get updated rather than duplicated).
+      // Empty product on either side → wildcard (legacy rows without a product
+      // column still get updated rather than duplicated).
       const isProductMatch = existingProduct === normInProduct
         || existingProduct === ''
         || normInProduct === ''
         || existingProduct.includes(normInProduct)
         || normInProduct.includes(existingProduct);
 
-      if (measureMatch && isCertMatch && isProductMatch) {
+      if (isCertMatch && isProductMatch) {
         console.log(
-          `[findExistingCertRow] Field match at row ${r}: ` +
-          `measure="${existingMeasure}", cert="${existingCert}", product="${existingProduct}"`
+          `[findExistingCertRow] Cert-name match at row ${r}: ` +
+          `existing="${existingCert}", incoming="${normInCert}", product="${existingProduct}"`
         );
         return r;
       }
@@ -747,7 +754,11 @@ export async function appendToMasterExcel(
       );
 
       if (matchRow !== null) {
-        // Update ONLY the three data columns that change on a re-upload.
+        // Update ONLY dates (cols I/J) and Comments (col O).
+        // Col F (Certification) is intentionally NOT written — the sheet may
+        // have a richer description ("ISO 9001:2015 (Quality Management System)")
+        // that the AI would overwrite with a shorter form ("ISO 9001:2015").
+        // Col O is appended, not overwritten, to preserve existing paragraphs.
         // Column numbers are hard-coded to prevent data-shift bugs caused by
         // column-map misresolution. Styling on existingRow is left 100% untouched.
         const existingRow = ws.getRow(matchRow);
