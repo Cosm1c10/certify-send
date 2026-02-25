@@ -667,10 +667,7 @@ export async function appendToMasterExcel(
     if (supplierMap && Object.keys(supplierMap).length > 0) {
       const matchResult = matchSupplier(cert.supplierName, supplierMap, 0.75);
       if (matchResult.wasMatched) {
-         // Pass the master file short account name through a hidden property
-         (cert as any)._matchedAccount = Object.keys(supplierMap).find(
-            k => supplierMap[k].supplierName === matchResult.matchedName
-         );
+         (cert as any)._matchedAccount = matchResult.matchedAccount;
          cert.supplierName = matchResult.matchedName;
       }
     }
