@@ -30,45 +30,71 @@ import { prepareExportData } from '@/utils/exportExcel';
  */
 async function stripDrawings(buffer: ArrayBuffer): Promise<ArrayBuffer> {
   const zip = await JSZip.loadAsync(buffer);
+  const allPaths = Object.keys(zip.files);
 
-  // Collect drawing paths before iterating (avoid mutation during iteration)
-  const drawingPaths = Object.keys(zip.files).filter(
-    p => p.startsWith('xl/drawings/') && !p.endsWith('/')
-  );
+  // 1: Find ALL drawing-related files (xl/drawings/* and legacy vmlDrawing files)
+  const drawingFiles = allPaths.filter(p => {
+    if (p.endsWith('/')) return false;
+    const lower = p.toLowerCase();
+    return lower.includes('/drawings/') || lower.includes('vmldrawing');
+  });
 
-  if (drawingPaths.length === 0) {
-    // No drawings — return original buffer unchanged
+  if (drawingFiles.length === 0) {
+    console.log('[stripDrawings] No drawing files found — loading buffer as-is');
     return buffer;
   }
+  console.log('[stripDrawings] Removing drawing files:', drawingFiles);
 
-  // 1 & 2: Remove drawing XML and their _rels
-  for (const path of drawingPaths) {
+  for (const path of drawingFiles) {
     zip.remove(path);
   }
 
-  // 3: Patch worksheet _rels files — remove any <Relationship> that points to a drawing
-  const wsRelPaths = Object.keys(zip.files).filter(
-    p => p.startsWith('xl/worksheets/_rels/') && p.endsWith('.rels')
-  );
-  for (const relPath of wsRelPaths) {
-    let xml = await zip.file(relPath)!.async('string');
-    // Remove complete self-closing Relationship elements whose Type ends in /drawing.
-    // Previous regex stopped at the first "/" inside the element and left a dangling
-    // "drawings/drawing1.xml"/>" fragment — causing the "reading 'Target'" crash.
-    xml = xml.replace(/<Relationship[^>]*Type="[^"]*\/drawing"[^>]*\/>/g, '');
-    zip.file(relPath, xml);
+  // 2: Remove drawing Relationship entries from ALL .rels files.
+  //
+  // Previous regex /<Relationship[^>]*Type="..."[^>]*\/>/g failed because:
+  //   - [^>]* stops at ">" but "/" appears INSIDE attribute values (e.g. in Target="../drawings/")
+  //     — only in the original broken version
+  //   - More importantly: attribute order is not guaranteed (Type may come AFTER Target)
+  //   - The XML element may span multiple lines
+  //
+  // Fix: use [^]*? (JS-only — matches ANY char including newlines, non-greedy) in a
+  // callback replace so we can inspect the full matched element before removing it.
+  const stripDrawingRels = (xml: string): string =>
+    xml.replace(/<Relationship\b[^]*?\/>/g, (match) => {
+      // Remove only elements whose Type attribute value contains "drawing" (covers
+      // both modern /drawing and legacy /vmlDrawing relationship types)
+      if (/Type="[^"]*drawing/i.test(match)) {
+        console.log('[stripDrawings] Removed rel:', match.slice(0, 100));
+        return '';
+      }
+      return match;
+    });
+
+  const relPaths = allPaths.filter(p => p.endsWith('.rels'));
+  for (const relPath of relPaths) {
+    const file = zip.file(relPath);
+    if (!file) continue;
+    const original = await file.async('string');
+    const patched = stripDrawingRels(original);
+    if (patched !== original) {
+      zip.file(relPath, patched);
+      console.log('[stripDrawings] Patched:', relPath);
+    }
   }
 
-  // 4: Patch [Content_Types].xml — remove Override entries for drawing files
+  // 3: Remove drawing Override entries from [Content_Types].xml
   const ctFile = zip.file('[Content_Types].xml');
   if (ctFile) {
-    let ctXml = await ctFile.async('string');
-    ctXml = ctXml.replace(/<Override[^>]+drawing[^>]*\/>/g, '');
-    zip.file('[Content_Types].xml', ctXml);
+    const original = await ctFile.async('string');
+    const patched = original.replace(/<Override\b[^]*?\/>/g, (match) => {
+      if (/drawing/i.test(match)) return '';
+      return match;
+    });
+    if (patched !== original) zip.file('[Content_Types].xml', patched);
   }
 
   const result = await zip.generateAsync({ type: 'arraybuffer', compression: 'DEFLATE' });
-  console.log(`[stripDrawings] Removed ${drawingPaths.length} drawing file(s) from XLSX`);
+  console.log(`[stripDrawings] Done — removed ${drawingFiles.length} drawing file(s)`);
   return result;
 }
 
