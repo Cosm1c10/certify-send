@@ -52,8 +52,10 @@ async function stripDrawings(buffer: ArrayBuffer): Promise<ArrayBuffer> {
   );
   for (const relPath of wsRelPaths) {
     let xml = await zip.file(relPath)!.async('string');
-    // Remove Relationship elements whose Type ends in /drawing
-    xml = xml.replace(/<Relationship[^>]+\/drawing"[^/]*/g, '');
+    // Remove complete self-closing Relationship elements whose Type ends in /drawing.
+    // Previous regex stopped at the first "/" inside the element and left a dangling
+    // "drawings/drawing1.xml"/>" fragment — causing the "reading 'Target'" crash.
+    xml = xml.replace(/<Relationship[^>]*Type="[^"]*\/drawing"[^>]*\/>/g, '');
     zip.file(relPath, xml);
   }
 
