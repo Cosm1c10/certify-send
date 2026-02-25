@@ -724,21 +724,50 @@ export async function appendToMasterExcel(
   let insertCount = 0;
   let updateCount = 0;
 
-  // In-memory tracking for this batch run (ACTIONs 2, 3, 4):
-  //   processedCertTypesThisSession — blocks re-inserting the same cert type
-  //     when the user uploads duplicate files in one batch.
-  //   newBlockStartedFor — tracks which new-supplier keys already had their
-  //     first (Account/Name/Country) row written, so subsequent certs for the
-  //     same new supplier get blank A/B/C (visual grouping rule).
+  // ── In-memory tracking for this batch run ────────────────────────────────────
+  //
+  //   processedCertTypesThisSession
+  //     Blocks re-inserting the same cert type when the user uploads duplicate
+  //     files in one batch.  Key: measure|cert|product|filename.
+  //
+  //   newBlockStartedFor
+  //     Tracks which supplier keys have already had their first (Account/Name/
+  //     Country) row written, so subsequent certs in the block get blank A/B/C.
+  //
+  //   batchInsertPtr
+  //     STRICT SEQUENTIAL INSERTION — root-cause fix for "ghost rows" when a
+  //     batch contains incomplete certs.
+  //
+  //     Problem: each cert re-calls findInsertionRow which calls findTrueLastRow.
+  //     findTrueLastRow is blind to sub-rows that have blank anchor columns
+  //     (A/B/F) — e.g. the 2nd and later rows of a new supplier block when the
+  //     AI failed to extract a cert name.  Every time a new incomplete row is
+  //     inserted, findTrueLastRow snapbacks to the FIRST row of the block and
+  //     re-anchors insertAt = lastSupplierRow + 1.  Subsequent certs keep
+  //     inserting at that same slot, pushing earlier ones down — the block ends
+  //     up in reverse order, or (for truly blank rows) at a completely wrong
+  //     position near the bottom of the sheet.
+  //
+  //     Fix: after the FIRST insert for a supplier in this batch, record
+  //     insertAt + 1 in batchInsertPtr.  Every subsequent cert for the same
+  //     supplier reads the pointer and increments it after each insert, giving
+  //     guaranteed sequential rows regardless of whether those rows have any
+  //     data in the anchor columns.
+  //
+  //   batchSupplierWasFound
+  //     Stores whether the supplier's block pre-existed in the sheet (needed to
+  //     decide: run update-in-place check vs. always-insert for new suppliers).
+  // ─────────────────────────────────────────────────────────────────────────────
   const processedCertTypesThisSession = new Set<string>();
-  const newBlockStartedFor = new Set<string>();
+  const newBlockStartedFor            = new Set<string>();
+  const batchInsertPtr                = new Map<string, number>();
+  const batchSupplierWasFound         = new Map<string, boolean>();
 
   for (const cert of processedCertificates) {
-    // ACTION 4 — In-session duplicate prevention.
-    // Key includes measure + cert + product category + filename so that
-    // identical files re-uploaded in the same batch are skipped, but two
-    // DIFFERENT products with the same cert type (e.g. OK Compost for Cups
-    // and OK Compost for Containers) get their own keys and are both inserted.
+    // ── In-session duplicate prevention ──────────────────────────────────────
+    // Key: measure|cert|product|filename — identical files re-uploaded in the
+    // same batch are skipped, but two DIFFERENT products with the same cert type
+    // (e.g. OK Compost Cups vs OK Compost Containers) each get their own row.
     const certKey = (cert.measure || '') + '|' + (cert.certification || '')
       + '|' + (cert.productCategory || '') + '|' + (cert.fileName || '');
     if (processedCertTypesThisSession.has(certKey)) {
@@ -750,20 +779,32 @@ export async function appendToMasterExcel(
     processedCertTypesThisSession.add(certKey);
 
     const overrideAccount: string | undefined = (cert as any)._matchedAccount || undefined;
+    const supplierKey = overrideAccount || cert.supplierName || '';
 
-    // Re-scan each time — previous insertions shift row numbers
-    const { insertAt, supplierFound } = findInsertionRow(
-      ws,
-      cols.supplierAccount ?? 1,
-      cols.supplierName    ?? 2,
-      cols.certification   ?? 6,
-      headerRowNum,
-      overrideAccount
-    );
+    // ── Determine insertion point ─────────────────────────────────────────────
+    // First encounter for this supplier key in this batch: scan the sheet once.
+    // Every subsequent encounter: use the pre-tracked pointer so that rows
+    // already inserted (which may have blank anchor columns A/B/F) never confuse
+    // findTrueLastRow and reverse the insertion order.
+    let insertAt: number;
+    let supplierFound: boolean;
+
+    if (batchInsertPtr.has(supplierKey)) {
+      insertAt      = batchInsertPtr.get(supplierKey)!;
+      supplierFound = batchSupplierWasFound.get(supplierKey)!;
+    } else {
+      ({ insertAt, supplierFound } = findInsertionRow(
+        ws,
+        cols.supplierAccount ?? 1,
+        cols.supplierName    ?? 2,
+        cols.certification   ?? 6,
+        headerRowNum,
+        overrideAccount
+      ));
+    }
 
     // ── Pre-calculate Status & Days for Protected View ────────────────────────
-    // These are injected as formula `result` so Excel shows them in Protected
-    // View (where the calc engine is blocked) and in fullCalcOnLoad mode.
+    // Injected as formula `result` so Excel shows them in Protected View.
     const expiryForCalc = cert.expiryDate && cert.expiryDate !== 'Not Found'
       ? cert.expiryDate : '';
     let calculatedDays: number | string = '';
@@ -772,13 +813,14 @@ export async function appendToMasterExcel(
       const expiryMs = new Date(expiryForCalc).getTime();
       if (!isNaN(expiryMs)) {
         const days = Math.floor((expiryMs - Date.now()) / (1000 * 60 * 60 * 24));
-        calculatedDays  = days;
+        calculatedDays   = days;
         calculatedStatus = days < 0 ? 'Expired' : 'Up to date';
       }
     }
 
-    // ── ACTION 1: Update-in-Place (Deduplication) ─────────────────────────────
-    // Only check for duplicates when we know the supplier already has a block.
+    // ── Update-in-Place (only for pre-existing supplier blocks) ──────────────
+    // For new supplier blocks we are building this session, skip the duplicate
+    // check — the block didn't exist before, so there is nothing to match.
     if (supplierFound) {
       const matchRow = findExistingCertRow(
         ws,
@@ -797,23 +839,22 @@ export async function appendToMasterExcel(
         // Col F (Certification) is intentionally NOT written — the sheet may
         // have a richer description ("ISO 9001:2015 (Quality Management System)")
         // that the AI would overwrite with a shorter form ("ISO 9001:2015").
-        // Col O is appended, not overwritten, to preserve existing paragraphs.
-        // Column numbers are hard-coded to prevent data-shift bugs caused by
-        // column-map misresolution. Styling on existingRow is left 100% untouched.
+        // Col O is appended, not overwritten, to preserve existing content.
+        // Column numbers are hard-coded to prevent data-shift bugs.
+        // Do NOT advance batchInsertPtr — no row was inserted, so the next
+        // cert should still land at the same sequential position.
         const existingRow = ws.getRow(matchRow);
 
         // col 9 (I) — Issued date
         existingRow.getCell(9).value = parseDateValue(cert.issueDate || '');
 
         // col 10 (J) — Date of Expiry
-        const expiryStr = cert.expiryDate && cert.expiryDate !== 'Not Found'
+        const expiryStrU = cert.expiryDate && cert.expiryDate !== 'Not Found'
           ? cert.expiryDate : '';
         existingRow.getCell(10).value =
-          expiryStr ? (parseDateValue(expiryStr) ?? 'No Date') : 'No Date';
+          expiryStrU ? (parseDateValue(expiryStrU) ?? 'No Date') : 'No Date';
 
-        // col 15 (O) — Append filename + cert number to Comments, but ONLY if
-        // the filename is not already present. Guards against the same file
-        // being re-uploaded and producing "file.pdf | file.pdf" spam.
+        // col 15 (O) — Append filename + cert number, guard against spam
         const existingComments = existingRow.getCell(15).value?.toString() ?? '';
         const fileAlreadyLogged = cert.fileName
           ? existingComments.includes(cert.fileName)
@@ -829,12 +870,9 @@ export async function appendToMasterExcel(
         }
 
         // col 4 (D) — Scope symbol: re-write value + force red font.
-        // The update path skips applySmartAlignment to preserve client formatting,
-        // but the red-font rule on the Scope column is non-negotiable — without it
-        // the "!" / "+" symbols render black on updated rows.
         const scopeCell = existingRow.getCell(4);
         scopeCell.value  = cert.scope || '';
-        scopeCell.numFmt = '@'; // prevent "+" / "!" being parsed as formula
+        scopeCell.numFmt = '@';
         scopeCell.font   = { ...(scopeCell.font ?? {}), color: { argb: 'FFFF0000' } };
 
         existingRow.commit();
@@ -843,15 +881,15 @@ export async function appendToMasterExcel(
           `[appendToMasterExcel] Updated row ${matchRow} in-place: ` +
           `"${cert.supplierName}" → "${cert.certification}"`
         );
-        continue; // ← skip insert
+        continue; // ← skip insert; do NOT advance batchInsertPtr
       }
     }
 
-    // ── NO MATCH: insert a new row at the bottom of the supplier's block ──────
+    // ── NEW ROW: insert strictly at the tracked sequential position ───────────
     ws.insertRow(insertAt, []);
 
     const newRow   = ws.getRow(insertAt);
-    const aboveRow = ws.getRow(insertAt - 1); // row directly above
+    const aboveRow = ws.getRow(insertAt - 1);
 
     // PASS 1 — Copy styles from the row directly above (deep-safe clone)
     aboveRow.eachCell({ includeEmpty: true }, (aboveCell, colNumber) => {
@@ -859,11 +897,9 @@ export async function appendToMasterExcel(
     });
 
     // PASS 2 — Aggressive formula sourcing for H (Status) and K (Days to Expire).
-    //
-    // Scan ALL the way back to headerRowNum + 1 for a row with a live col K formula
-    // (multiple "No Date" rows might sit above the insertion point, all with empty K).
-    // Once found, pin every formula cell reference to insertAt and inject the
-    // pre-calculated result so Protected View shows numbers without a calc engine.
+    // Scan backwards from insertAt-1 for a row with a live col K formula so that
+    // "No Date" rows (which have empty K) above the insertion point don't block
+    // formula inheritance. Pin all references to insertAt and inject results.
     const kCol      = cols.daysToExpire; // already has ?? 11 from cols definition
     const statusCol = cols.status;       // already has ?? 8
 
@@ -877,20 +913,14 @@ export async function appendToMasterExcel(
 
     formulaTemplateRow.eachCell({ includeEmpty: true }, (templateCell, colNumber) => {
       if (templateCell.type === ExcelJS.ValueType.Formula && templateCell.formula) {
-        // Col 4 (Scope / col D) is a plain-text column written in PASS 3.
-        // If the template row has any formula in col 4 (e.g. a legacy conditional
-        // or an artifact from shared-formula expansion), propagating it here
-        // would put a formula result — potentially a "+" or "!" string — in the
-        // new row's Scope cell BEFORE PASS 3 can overwrite it with the real value.
-        // Skip col 4 entirely; PASS 3's setCell() always handles it.
+        // Col 4 (Scope / col D) is plain text written in PASS 3 — never propagate
+        // a formula here or it could inject a stray "+" / "!" before PASS 3 runs.
         if (colNumber === 4) return;
 
         const pinned = templateCell.formula.replace(
           /([A-Z]+)(\d+)/g,
           (_m, col) => `${col}${insertAt}`
         );
-        // Inject pre-calculated result alongside formula.
-        // Excel uses `result` as the displayed value when calc is blocked.
         if (colNumber === kCol) {
           newRow.getCell(colNumber).value = { formula: pinned, result: calculatedDays };
         } else if (colNumber === statusCol) {
@@ -907,42 +937,29 @@ export async function appendToMasterExcel(
       newRow.getCell(colIndex).value = value ?? null;
     };
 
-    // Visual grouping rule: only the FIRST row of a supplier block carries
-    // Account (col 1), Name (col 2), Country (col 3). Every subsequent row
-    // inside the same block MUST be strictly blank in those three columns.
-    //
-    // Using "" (empty string) rather than null — ExcelJS may silently skip
-    // writing null on an inserted row that inherited a value from above,
-    // whereas an explicit "" always overwrites the cell with an empty value.
-    // Hard-coded column numbers 1/2/3 are used so the write is not dependent
-    // on the column map resolving correctly.
+    // Visual grouping: only the FIRST row of a supplier block carries A/B/C.
+    // Hard-coded cols 1/2/3 — independent of the column map.
     if (supplierFound) {
       // Existing block — enforce blanks regardless of what was inherited
       newRow.getCell(1).value = '';
       newRow.getCell(2).value = '';
       newRow.getCell(3).value = '';
     } else {
-      // New supplier at the bottom.
-      // Only the FIRST cert for this supplier in the current batch gets A/B/C.
-      // Subsequent certs for the same supplier (keyed by account or name) get
-      // blank A/B/C so the visual grouping rule is honoured across the whole batch.
-      const supplierKey = overrideAccount || cert.supplierName || '';
+      // New supplier at the bottom: only the first cert of this key gets A/B/C.
       if (!newBlockStartedFor.has(supplierKey)) {
-        setCell(cols.supplierAccount, overrideAccount     || null);
-        setCell(cols.supplierName,    cert.supplierName   || null);
-        setCell(cols.country,         cert.country        || null);
+        setCell(cols.supplierAccount, overrideAccount   || null);
+        setCell(cols.supplierName,    cert.supplierName || null);
+        setCell(cols.country,         cert.country      || null);
         newBlockStartedFor.add(supplierKey);
       } else {
-        // Not the first row for this new supplier — blank A/B/C
         newRow.getCell(1).value = '';
         newRow.getCell(2).value = '';
         newRow.getCell(3).value = '';
       }
     }
 
-    // col D (Scope): plain string — numFmt '@' in the alignment loop below forces
-    // text storage, so no apostrophe hack needed.
-    setCell(cols.scope, cert.scope || null);
+    // col D (Scope): numFmt '@' forced by applySmartAlignment below
+    setCell(cols.scope,           cert.scope           || null);
     setCell(cols.measure,         cert.measure         || null);
     setCell(cols.certification,   cert.certification   || null);
     setCell(cols.productCategory, cert.productCategory || null);
@@ -963,11 +980,18 @@ export async function appendToMasterExcel(
     if (cert.certificateNumber) commentParts.push(`Cert #${cert.certificateNumber}`);
     setCell(cols.comments, commentParts.join(' | ') || null);
 
-    // Smart alignment: center data/date columns, left-align text-heavy columns.
-    // Col 4 (Scope) also gets numFmt '@' + uniform red font.
     applySmartAlignment(newRow);
     newRow.commit();
     insertCount++;
+
+    // ── Advance the per-supplier pointer ──────────────────────────────────────
+    // Record (or update) the NEXT available row for this supplier key so the
+    // following cert lands directly below — even if it has no data in the
+    // anchor columns (A/B/F) that findTrueLastRow uses to detect real rows.
+    batchInsertPtr.set(supplierKey, insertAt + 1);
+    if (!batchSupplierWasFound.has(supplierKey)) {
+      batchSupplierWasFound.set(supplierKey, supplierFound);
+    }
 
     console.log(
       `[appendToMasterExcel] Inserted row at ${insertAt} for "${cert.supplierName}" ` +
