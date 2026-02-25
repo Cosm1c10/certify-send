@@ -243,7 +243,7 @@ function parseDateValue(dateStr: string): Date | string | null {
 }
 
 /**
- * Find the true last data row by scanning BACKWARDS from ws.rowCount.
+ * Find the true last data row by scanning BACKWARDS from a capped upper bound.
  *
  * Why backwards instead of forwards:
  *   After expandSharedFormulas(), formula cells throughout the sheet (e.g. rows
@@ -252,24 +252,63 @@ function parseDateValue(dateStr: string): Date | string | null {
  *   see these as non-empty and report row 847 (or wherever formulas end) as the
  *   last data row, pushing new supplier blocks to row 10,000+.
  *
- *   Scanning backwards with `cell.text` (the rendered string, not the raw
- *   value/formula object) correctly treats empty-result formula cells as blank
- *   and stops at the first row that actually shows visible text in either the
- *   Supplier Name column or the Certification column.
+ * Why we check cell.type and skip formula cells:
+ *   Even when using `cell.text` (rendered string), formula cells can have
+ *   non-empty CACHED results stored in the original file's <v> elements.
+ *   These cached values survive expandSharedFormulas() and would fool the
+ *   backward scan into thinking rows below the real data range are non-empty.
+ *   Restricting to ValueType.String / .Number / .Date (i.e. plain data cells)
+ *   eliminates formula-cache false positives entirely.
+ *
+ * Why three anchor columns (account, name, certification):
+ *   Supplier Name (col B) can be blank for sub-rows (visual grouping rule).
+ *   Certification (col F) may occasionally be formula-driven in some files.
+ *   Supplier Account (col A) is always plain text and present on the FIRST
+ *   row of every supplier block — checking it provides a rock-solid anchor
+ *   that is independent of the other two columns.
+ *
+ * Scan cap:
+ *   We never scan higher than startRow + MAX_SCAN_ROWS to avoid materialising
+ *   tens of thousands of phantom ExcelJS Row/Cell objects in files whose
+ *   formatting rows extend to row 10 000+. Any realistic master file fits well
+ *   within 5 000 data rows.
  */
+const MAX_SCAN_ROWS = 5_000;
+
 function findTrueLastRow(
   ws: ExcelJS.Worksheet,
+  supplierAccountCol: number,
   supplierNameCol: number,
   certCol: number,
   startRow: number
 ): number {
-  const bottom = Math.max(ws.rowCount, startRow);
+  // Cap: never scan more than MAX_SCAN_ROWS rows above startRow.
+  // This prevents materialising phantom ExcelJS Row objects for every
+  // formatting-only row in large files.
+  const bottom = Math.min(ws.rowCount, startRow + MAX_SCAN_ROWS);
+
+  /** Return true only for plain data cells (text/number/date) with visible content.
+   *  Formula cells are explicitly excluded — their cached <v> values can make
+   *  blank template rows appear non-empty even though they show nothing on screen.
+   */
+  function isRealData(cell: ExcelJS.Cell): boolean {
+    const t = cell.type;
+    if (
+      t === ExcelJS.ValueType.Null      ||
+      t === ExcelJS.ValueType.Formula   ||
+      t === ExcelJS.ValueType.Error     ||
+      t === ExcelJS.ValueType.Merge
+    ) return false;
+    return (cell.text ?? '').trim() !== '';
+  }
 
   for (let r = bottom; r >= startRow; r--) {
-    const row        = ws.getRow(r);
-    const nameText   = (row.getCell(supplierNameCol).text ?? '').trim();
-    const certText   = (row.getCell(certCol).text         ?? '').trim();
-    if (nameText !== '' || certText !== '') {
+    const row = ws.getRow(r);
+    if (
+      isRealData(row.getCell(supplierAccountCol)) ||
+      isRealData(row.getCell(supplierNameCol))    ||
+      isRealData(row.getCell(certCol))
+    ) {
       console.log(`[findTrueLastRow] True last data row: ${r}`);
       return r;
     }
@@ -299,7 +338,7 @@ function findInsertionRow(
   headerRowNum: number,
   overrideAccount: string | undefined
 ): { insertAt: number; supplierFound: boolean } {
-  const trueLastRow = findTrueLastRow(ws, supplierNameCol, certCol, headerRowNum + 1);
+  const trueLastRow = findTrueLastRow(ws, supplierAccountCol, supplierNameCol, certCol, headerRowNum + 1);
 
   if (overrideAccount) {
     const normalizedTarget = overrideAccount.toLowerCase().trim();
@@ -838,6 +877,14 @@ export async function appendToMasterExcel(
 
     formulaTemplateRow.eachCell({ includeEmpty: true }, (templateCell, colNumber) => {
       if (templateCell.type === ExcelJS.ValueType.Formula && templateCell.formula) {
+        // Col 4 (Scope / col D) is a plain-text column written in PASS 3.
+        // If the template row has any formula in col 4 (e.g. a legacy conditional
+        // or an artifact from shared-formula expansion), propagating it here
+        // would put a formula result — potentially a "+" or "!" string — in the
+        // new row's Scope cell BEFORE PASS 3 can overwrite it with the real value.
+        // Skip col 4 entirely; PASS 3's setCell() always handles it.
+        if (colNumber === 4) return;
+
         const pinned = templateCell.formula.replace(
           /([A-Z]+)(\d+)/g,
           (_m, col) => `${col}${insertAt}`
