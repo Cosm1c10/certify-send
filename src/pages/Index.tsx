@@ -41,6 +41,9 @@ const Index = () => {
   const [comboboxOpen, setComboboxOpen] = useState(false);
   // Tracks live search text inside the combobox — used to offer "Add new supplier" option
   const [supplierSearchValue, setSupplierSearchValue] = useState('');
+  // "Add new supplier" inline-input mode (constant button below the dropdown)
+  const [addingNewSupplier, setAddingNewSupplier] = useState(false);
+  const [newSupplierInput, setNewSupplierInput] = useState('');
 
   // New Suppliers Dialog state
   const [showNewSuppliersDialog, setShowNewSuppliersDialog] = useState(false);
@@ -350,6 +353,68 @@ const Index = () => {
                   </button>
                 )}
               </div>
+            )}
+
+            {/* ── Add New Supplier ─────────────────────────────────────────────
+                Always-visible shortcut so the user doesn't have to type inside the
+                combobox. Only shown when a Master File is loaded (without one the
+                plain text input above already serves this purpose).             */}
+            {masterFile.isLoaded && (
+              addingNewSupplier ? (
+                /* Inline text input + confirm / cancel */
+                <div className="mt-2 flex items-center gap-1.5">
+                  <Input
+                    autoFocus
+                    type="text"
+                    placeholder="New supplier name..."
+                    value={newSupplierInput}
+                    onChange={(e) => setNewSupplierInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && newSupplierInput.trim()) {
+                        setSelectedSupplierOverride(newSupplierInput.trim());
+                        setNewSupplierInput('');
+                        setAddingNewSupplier(false);
+                      }
+                      if (e.key === 'Escape') {
+                        setNewSupplierInput('');
+                        setAddingNewSupplier(false);
+                      }
+                    }}
+                    className="h-8 text-sm flex-1 border-green-300 focus-visible:ring-green-400"
+                  />
+                  <button
+                    type="button"
+                    disabled={!newSupplierInput.trim()}
+                    onClick={() => {
+                      if (newSupplierInput.trim()) {
+                        setSelectedSupplierOverride(newSupplierInput.trim());
+                        setNewSupplierInput('');
+                        setAddingNewSupplier(false);
+                      }
+                    }}
+                    className="h-8 w-8 flex items-center justify-center rounded border border-green-300 text-green-700 hover:bg-green-50 disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setNewSupplierInput(''); setAddingNewSupplier(false); }}
+                    className="h-8 w-8 flex items-center justify-center rounded border border-gray-200 text-gray-400 hover:bg-gray-50 flex-shrink-0"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ) : (
+                /* Constant "Add new supplier" button */
+                <button
+                  type="button"
+                  onClick={() => setAddingNewSupplier(true)}
+                  className="mt-2 flex items-center gap-1 text-xs font-medium text-green-700 hover:text-green-800 hover:underline"
+                >
+                  <Plus className="w-3 h-3" />
+                  Add new supplier
+                </button>
+              )
             )}
 
             {selectedSupplierOverride && (
