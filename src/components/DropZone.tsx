@@ -20,11 +20,19 @@ const SUPPORTED_IMAGE_TYPES = ['image/jpeg', 'image/jpg', 'image/png'];
 const SUPPORTED_PDF_TYPE = 'application/pdf';
 const SUPPORTED_DOCX_TYPE = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
+// Accepted MIME types for folder-scan filtering
+const ACCEPTED_MIME_TYPES = new Set([
+  SUPPORTED_PDF_TYPE,
+  SUPPORTED_DOCX_TYPE,
+  ...SUPPORTED_IMAGE_TYPES,
+]);
+
 const DropZone = ({ onFilesProcess, isProcessing, processingProgress }: DropZoneProps) => {
   const [isDragging, setIsDragging] = useState(false);
   const [isConverting, setIsConverting] = useState(false);
   const [conversionProgress, setConversionProgress] = useState({ current: 0, total: 0 });
 
+  // Fallback ref for browsers without showDirectoryPicker (Firefox, older Safari)
   const folderInputRef = useRef<HTMLInputElement>(null);
 
   // Convert image file directly to base64
@@ -163,21 +171,67 @@ const DropZone = ({ onFilesProcess, isProcessing, processingProgress }: DropZone
     e.target.value = '';
   }, [processFiles]);
 
-  // Strip macOS/Windows system files before handing off to processFiles.
-  // processFiles already filters by MIME type, so no further filtering needed here.
-  const handleFolderSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+  // Fallback handler for webkitdirectory input (Firefox / older browsers)
+  const handleFolderInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const fileList = e.target.files;
     if (!fileList || fileList.length === 0) return;
-
-    const files = Array.from(fileList).filter(file => !file.name.startsWith('.'));
-
-    if (files.length > 0) {
-      processFiles(files);
-    } else {
-      alert('No supported files found in the selected folder (PDF, DOCX, JPG, PNG)');
-    }
+    const files = Array.from(fileList).filter(
+      f => !f.name.startsWith('.') && ACCEPTED_MIME_TYPES.has(f.type)
+    );
+    if (files.length > 0) processFiles(files);
+    else alert('No supported files found in the selected folder (PDF, DOCX, JPG, PNG)');
     e.target.value = '';
   }, [processFiles]);
+
+  /**
+   * Open a folder picker using the modern File System Access API when available
+   * (Chrome 86+, Edge 86+). Falls back to a hidden <input webkitdirectory> for
+   * Firefox and older browsers.
+   *
+   * Why showDirectoryPicker instead of webkitdirectory?
+   * With webkitdirectory the OS file picker opens in "file" mode — clicking a
+   * folder navigates INTO it instead of selecting it, which is confusing.
+   * showDirectoryPicker() opens a true "Select Folder" OS dialog where a single
+   * click on the folder + the "Select Folder" button is all the user needs.
+   */
+  const handleFolderButtonClick = useCallback(async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (isProcessing || isConverting) return;
+
+    // Modern path: File System Access API
+    if ('showDirectoryPicker' in window) {
+      try {
+        // @ts-expect-error showDirectoryPicker is not yet in lib.dom.d.ts
+        const dirHandle: FileSystemDirectoryHandle = await window.showDirectoryPicker({ mode: 'read' });
+
+        const files: File[] = [];
+        // @ts-expect-error FileSystemDirectoryHandle.values() not in all TS targets
+        for await (const entry of dirHandle.values()) {
+          if (entry.kind === 'file') {
+            const file: File = await entry.getFile();
+            if (!file.name.startsWith('.') && ACCEPTED_MIME_TYPES.has(file.type)) {
+              files.push(file);
+            }
+          }
+        }
+
+        if (files.length > 0) {
+          processFiles(files);
+        } else {
+          alert('No supported files found in the selected folder (PDF, DOCX, JPG, PNG)');
+        }
+      } catch (err) {
+        // AbortError = user pressed Cancel — silently ignore
+        if ((err as DOMException).name !== 'AbortError') {
+          console.error('[DropZone] showDirectoryPicker error:', err);
+        }
+      }
+      return;
+    }
+
+    // Fallback: webkitdirectory hidden input
+    folderInputRef.current?.click();
+  }, [isProcessing, isConverting, processFiles]);
 
   const getProgressText = () => {
     if (isConverting) {
@@ -224,8 +278,8 @@ const DropZone = ({ onFilesProcess, isProcessing, processingProgress }: DropZone
         disabled={isProcessing || isConverting}
       />
 
-      {/* Hidden folder picker — triggered only by the "Select Folder" button */}
-      {/* @ts-expect-error webkitdirectory / directory are not in React's InputHTMLAttributes */}
+      {/* Fallback folder picker for browsers without showDirectoryPicker */}
+      {/* @ts-expect-error webkitdirectory / directory not in React InputHTMLAttributes */}
       <input
         ref={folderInputRef}
         type="file"
@@ -233,7 +287,7 @@ const DropZone = ({ onFilesProcess, isProcessing, processingProgress }: DropZone
         multiple
         webkitdirectory=""
         directory=""
-        onChange={handleFolderSelect}
+        onChange={handleFolderInputChange}
         disabled={isProcessing || isConverting}
       />
 
@@ -281,10 +335,13 @@ const DropZone = ({ onFilesProcess, isProcessing, processingProgress }: DropZone
                 or <span className="text-yellow-600 font-medium">tap to browse</span>
               </p>
               <span className="text-gray-300 select-none">·</span>
-              {/* relative z-10 places this button above the invisible overlay input */}
+              {/*
+                relative z-10 places this button above the invisible overlay input.
+                e.stopPropagation() prevents the click from bubbling to that overlay.
+              */}
               <button
                 type="button"
-                onClick={(e) => { e.stopPropagation(); folderInputRef.current?.click(); }}
+                onClick={handleFolderButtonClick}
                 className="relative z-10 flex items-center gap-1 text-xs sm:text-sm text-yellow-600 font-medium hover:text-yellow-700 transition-colors"
               >
                 <FolderOpen className="w-3.5 h-3.5" />
