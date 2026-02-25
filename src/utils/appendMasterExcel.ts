@@ -2,8 +2,7 @@ import ExcelJS from 'exceljs';
 import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
 import { CertificateData } from '@/types/certificate';
-import { DynamicSupplierMap } from '@/utils/masterFileParser';
-import { prepareExportData } from '@/utils/exportExcel';
+import { DynamicSupplierMap, matchSupplier } from '@/utils/masterFileParser';
 
 // =============================================================================
 // APPEND TO MASTER EXCEL — V10 COMPLIANT
@@ -659,10 +658,27 @@ export async function appendToMasterExcel(
     return;
   }
 
-  // Step 1: Saurebh filter + supplier matching
-  const { processedCertificates } = prepareExportData(certificates, supplierMap);
+  // BYPASS: Do not use prepareExportData/applySaurabhFilter because it deletes
+  // certificates that share the same (or missing) certification name before
+  // the Fuzzy Deduplicator can properly assess them against the existing Master File.
+
+  const processedCertificates = certificates.map(cert => {
+    // Basic supplier mapping without dropping any files
+    if (supplierMap && Object.keys(supplierMap).length > 0) {
+      const matchResult = matchSupplier(cert.supplierName, supplierMap, 0.75);
+      if (matchResult.wasMatched) {
+         // Pass the master file short account name through a hidden property
+         (cert as any)._matchedAccount = Object.keys(supplierMap).find(
+            k => supplierMap[k].supplierName === matchResult.matchedName
+         );
+         cert.supplierName = matchResult.matchedName;
+      }
+    }
+    return cert;
+  });
+
   if (processedCertificates.length === 0) {
-    alert('No certificates remaining after deduplication');
+    alert('No certificates to process.');
     return;
   }
 
