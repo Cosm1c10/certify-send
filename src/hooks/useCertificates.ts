@@ -26,10 +26,14 @@ interface ProcessingProgress {
   total: number;
 }
 
-// Check if we should use local OpenAI (for development) or Supabase Edge Function (for production)
-const USE_LOCAL_OPENAI = !!import.meta.env.VITE_OPENAI_API_KEY && import.meta.env.DEV;
+// Call OpenAI directly whenever VITE_OPENAI_API_KEY is present — both in local
+// development AND in production (Vercel env vars). This bypasses the Supabase
+// Edge Function entirely, eliminating payload-size limits and aggressive timeouts
+// that cause "Failed to send a request to the Edge Function" on large PDFs.
+// If the key is not set, we fall back to the Supabase Edge Function.
+const USE_LOCAL_OPENAI = !!import.meta.env.VITE_OPENAI_API_KEY;
 
-console.log('OpenAI Mode:', USE_LOCAL_OPENAI ? 'LOCAL (direct API)' : 'PRODUCTION (Edge Function)');
+console.log('OpenAI Mode:', USE_LOCAL_OPENAI ? 'DIRECT (browser → OpenAI)' : 'EDGE (Supabase function)');
 
 function determineStatus(expiryDate: string): CertificateData['status'] {
   if (!expiryDate || expiryDate === 'Not Found') {
