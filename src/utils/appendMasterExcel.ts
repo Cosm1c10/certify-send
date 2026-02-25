@@ -789,7 +789,15 @@ export async function appendToMasterExcel(
             : newEntry || null;
         }
 
-        // NO alignment or font changes — preserves client's custom cell formatting.
+        // col 4 (D) — Scope symbol: re-write value + force red font.
+        // The update path skips applySmartAlignment to preserve client formatting,
+        // but the red-font rule on the Scope column is non-negotiable — without it
+        // the "!" / "+" symbols render black on updated rows.
+        const scopeCell = existingRow.getCell(4);
+        scopeCell.value  = cert.scope || '';
+        scopeCell.numFmt = '@'; // prevent "+" / "!" being parsed as formula
+        scopeCell.font   = { ...(scopeCell.font ?? {}), color: { argb: 'FFFF0000' } };
+
         existingRow.commit();
         updateCount++;
         console.log(
