@@ -1,4 +1,5 @@
 import ExcelJS from 'exceljs';
+import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
 import { CertificateData } from '@/types/certificate';
 import { DynamicSupplierMap } from '@/utils/masterFileParser';
@@ -10,6 +11,64 @@ import { prepareExportData } from '@/utils/exportExcel';
 // appends new certificate rows at the bottom with safe style inheritance,
 // and downloads the modified workbook — zero repair dialogs.
 // =============================================================================
+
+/**
+ * Strip drawing XML from an XLSX buffer before ExcelJS loads it.
+ *
+ * The client's Master File contains small icon shapes (!, +) anchored to cells
+ * in the Scope column. ExcelJS crashes on these with:
+ *   "Cannot read properties of undefined (reading 'Anchors')"
+ *
+ * An XLSX is a ZIP archive. We use JSZip to:
+ *   1. Remove xl/drawings/*.xml  (the shape/icon definitions)
+ *   2. Remove xl/drawings/_rels/*.rels  (their relationship files)
+ *   3. Patch xl/worksheets/_rels/sheet*.xml.rels to remove drawing references
+ *   4. Patch [Content_Types].xml to remove drawing content-type overrides
+ *
+ * This lets ExcelJS load cleanly. The icons disappear from the output,
+ * but all data, named ranges, tables, and conditional formats are preserved.
+ */
+async function stripDrawings(buffer: ArrayBuffer): Promise<ArrayBuffer> {
+  const zip = await JSZip.loadAsync(buffer);
+
+  // Collect drawing paths before iterating (avoid mutation during iteration)
+  const drawingPaths = Object.keys(zip.files).filter(
+    p => p.startsWith('xl/drawings/') && !p.endsWith('/')
+  );
+
+  if (drawingPaths.length === 0) {
+    // No drawings — return original buffer unchanged
+    return buffer;
+  }
+
+  // 1 & 2: Remove drawing XML and their _rels
+  for (const path of drawingPaths) {
+    zip.remove(path);
+  }
+
+  // 3: Patch worksheet _rels files — remove any <Relationship> that points to a drawing
+  const wsRelPaths = Object.keys(zip.files).filter(
+    p => p.startsWith('xl/worksheets/_rels/') && p.endsWith('.rels')
+  );
+  for (const relPath of wsRelPaths) {
+    let xml = await zip.file(relPath)!.async('string');
+    // Remove Relationship elements whose Type ends in /drawing
+    xml = xml.replace(/<Relationship[^>]+\/drawing"[^/]*/g, '');
+    zip.file(relPath, xml);
+  }
+
+  // 4: Patch [Content_Types].xml — remove Override entries for drawing files
+  const ctFile = zip.file('[Content_Types].xml');
+  if (ctFile) {
+    let ctXml = await ctFile.async('string');
+    ctXml = ctXml.replace(/<Override[^>]+drawing[^>]*\/>/g, '');
+    zip.file('[Content_Types].xml', ctXml);
+  }
+
+  const result = await zip.generateAsync({ type: 'arraybuffer', compression: 'DEFLATE' });
+  console.log(`[stripDrawings] Removed ${drawingPaths.length} drawing file(s) from XLSX`);
+  return result;
+}
 
 /**
  * Deep-clone cell style and data validation without copying ExcelJS internal
@@ -166,9 +225,11 @@ export async function appendToMasterExcel(
     return;
   }
 
-  // Step 2: Load workbook with ExcelJS
+  // Step 2: Strip drawing XML (anchored icons) so ExcelJS doesn't crash,
+  //         then load the cleaned buffer
+  const cleanBuffer = await stripDrawings(originalBuffer);
   const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(originalBuffer);
+  await workbook.xlsx.load(cleanBuffer);
 
   // Step 3: Find the data sheet
   const ws = findDataSheet(workbook);
