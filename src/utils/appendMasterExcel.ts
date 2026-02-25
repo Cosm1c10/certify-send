@@ -6,33 +6,51 @@ import { DynamicSupplierMap } from '@/utils/masterFileParser';
 import { prepareExportData } from '@/utils/exportExcel';
 
 // =============================================================================
-// APPEND TO MASTER EXCEL
-// Reads the original Master File using ExcelJS, finds the data sheet,
-// appends new certificate rows at the bottom with safe style inheritance,
-// and downloads the modified workbook — zero repair dialogs.
+// APPEND TO MASTER EXCEL — V10 COMPLIANT
+// Follows "Certificate Master Update Rules & Workflow" (2026-02-04):
+//
+//  § Column rules
+//    A  Supplier Account    — write
+//    B  Supplier Name       — write
+//    C  Country             — write
+//    D  Scope               — NEVER WRITE (shapes / icons live here)
+//    E  Measure             — write
+//    F  Certification       — write
+//    G  Product Category    — write
+//    H  Status              — FORMULA-DRIVEN: copy formula from row above
+//    I  Issued              — write as Date object
+//    J  Date of Expiry      — write as Date object, or "No Date" if unknown
+//    K  Days to Expire      — FORMULA-DRIVEN: copy formula from row above
+//    O  Comments            — write filename + cert number
+//
+//  § Expiry rule (§6): If expiry not stated → write exact string "No Date".
+//    Never null/empty. Never invent an expiry date.
+//
+//  § Update Log (§12): append one summary row to the "Update Log" sheet.
 // =============================================================================
 
-/**
- * Strip drawing XML from an XLSX buffer before ExcelJS loads it.
- *
- * The client's Master File contains small icon shapes (!, +) anchored to cells
- * in the Scope column. ExcelJS crashes on these with:
- *   "Cannot read properties of undefined (reading 'Anchors')"
- *
- * An XLSX is a ZIP archive. We use JSZip to:
- *   1. Remove xl/drawings/*.xml  (the shape/icon definitions)
- *   2. Remove xl/drawings/_rels/*.rels  (their relationship files)
- *   3. Patch xl/worksheets/_rels/sheet*.xml.rels to remove drawing references
- *   4. Patch [Content_Types].xml to remove drawing content-type overrides
- *
- * This lets ExcelJS load cleanly. The icons disappear from the output,
- * but all data, named ranges, tables, and conditional formats are preserved.
- */
+// -----------------------------------------------------------------------------
+// STEP 0 — Strip drawing XML from the XLSX ZIP so ExcelJS can load cleanly.
+//
+// Root causes of two sequential crashes:
+//   1. "reading 'Anchors'" — ExcelJS drawing parser hits a null drawing anchor
+//      in xl/drawings/drawingN.xml.
+//   2. "reading 'Target'"  — ExcelJS sees <drawing r:id="rId1"/> in the
+//      worksheet XML, looks up rId1 in the rels, gets undefined because we
+//      removed the rels entry but NOT the <drawing> reference in the sheet XML.
+//
+// Full 4-layer fix:
+//   Layer 1 — remove xl/drawings/* files (stops 'Anchors' crash)
+//   Layer 2 — patch worksheet XMLs to remove <drawing>/<legacyDrawing> refs
+//              (stops 'Target' crash — the reference is gone before lookup)
+//   Layer 3 — patch all .rels files to remove drawing Relationship entries
+//   Layer 4 — patch [Content_Types].xml to remove drawing Override entries
+// -----------------------------------------------------------------------------
 async function stripDrawings(buffer: ArrayBuffer): Promise<ArrayBuffer> {
   const zip = await JSZip.loadAsync(buffer);
   const allPaths = Object.keys(zip.files);
 
-  // 1: Find ALL drawing-related files (xl/drawings/* and legacy vmlDrawing files)
+  // Layer 1: Remove drawing XML files
   const drawingFiles = allPaths.filter(p => {
     if (p.endsWith('/')) return false;
     const lower = p.toLowerCase();
@@ -40,49 +58,55 @@ async function stripDrawings(buffer: ArrayBuffer): Promise<ArrayBuffer> {
   });
 
   if (drawingFiles.length === 0) {
-    console.log('[stripDrawings] No drawing files found — loading buffer as-is');
+    console.log('[stripDrawings] No drawing files — loading as-is');
     return buffer;
   }
-  console.log('[stripDrawings] Removing drawing files:', drawingFiles);
+  console.log('[stripDrawings] Removing:', drawingFiles);
+  for (const p of drawingFiles) zip.remove(p);
 
-  for (const path of drawingFiles) {
-    zip.remove(path);
+  // Layer 2: Remove <drawing r:id="..."/> and <legacyDrawing r:id="..."/>
+  // elements from worksheet XML files. Without this, ExcelJS looks up the
+  // r:id in the (now-patched) rels, gets undefined, and crashes on .Target.
+  const wsXmlPaths = allPaths.filter(
+    p => p.startsWith('xl/worksheets/') && p.endsWith('.xml') && !p.includes('_rels')
+  );
+  for (const wsPath of wsXmlPaths) {
+    const file = zip.file(wsPath);
+    if (!file) continue;
+    const original = await file.async('string');
+    const patched = original
+      .replace(/<drawing\b[^]*?\/>/g, '')
+      .replace(/<legacyDrawing\b[^]*?\/>/g, '');
+    if (patched !== original) {
+      zip.file(wsPath, patched);
+      console.log('[stripDrawings] Removed drawing refs from:', wsPath);
+    }
   }
 
-  // 2: Remove drawing Relationship entries from ALL .rels files.
-  //
-  // Previous regex /<Relationship[^>]*Type="..."[^>]*\/>/g failed because:
-  //   - [^>]* stops at ">" but "/" appears INSIDE attribute values (e.g. in Target="../drawings/")
-  //     — only in the original broken version
-  //   - More importantly: attribute order is not guaranteed (Type may come AFTER Target)
-  //   - The XML element may span multiple lines
-  //
-  // Fix: use [^]*? (JS-only — matches ANY char including newlines, non-greedy) in a
-  // callback replace so we can inspect the full matched element before removing it.
+  // Layer 3: Patch all .rels files — remove Relationship entries whose Type
+  // contains "drawing". Uses [^]*? (matches any char including newlines,
+  // non-greedy) in a callback so attribute order doesn't matter.
   const stripDrawingRels = (xml: string): string =>
     xml.replace(/<Relationship\b[^]*?\/>/g, (match) => {
-      // Remove only elements whose Type attribute value contains "drawing" (covers
-      // both modern /drawing and legacy /vmlDrawing relationship types)
       if (/Type="[^"]*drawing/i.test(match)) {
-        console.log('[stripDrawings] Removed rel:', match.slice(0, 100));
+        console.log('[stripDrawings] Removed rel:', match.slice(0, 80));
         return '';
       }
       return match;
     });
 
-  const relPaths = allPaths.filter(p => p.endsWith('.rels'));
-  for (const relPath of relPaths) {
+  for (const relPath of allPaths.filter(p => p.endsWith('.rels'))) {
     const file = zip.file(relPath);
     if (!file) continue;
     const original = await file.async('string');
     const patched = stripDrawingRels(original);
     if (patched !== original) {
       zip.file(relPath, patched);
-      console.log('[stripDrawings] Patched:', relPath);
+      console.log('[stripDrawings] Patched rels:', relPath);
     }
   }
 
-  // 3: Remove drawing Override entries from [Content_Types].xml
+  // Layer 4: Remove drawing Override entries from [Content_Types].xml
   const ctFile = zip.file('[Content_Types].xml');
   if (ctFile) {
     const original = await ctFile.async('string');
@@ -94,14 +118,28 @@ async function stripDrawings(buffer: ArrayBuffer): Promise<ArrayBuffer> {
   }
 
   const result = await zip.generateAsync({ type: 'arraybuffer', compression: 'DEFLATE' });
-  console.log(`[stripDrawings] Done — removed ${drawingFiles.length} drawing file(s)`);
+  console.log(`[stripDrawings] Done — stripped ${drawingFiles.length} drawing file(s)`);
   return result;
 }
 
+// -----------------------------------------------------------------------------
+// Helpers
+// -----------------------------------------------------------------------------
+
 /**
- * Deep-clone cell style and data validation without copying ExcelJS internal
- * proxy IDs or XML references. Using `{ ...cell.style }` copies those refs
- * and produces a corrupted workbook on write.
+ * Shift all cell references in a formula string down by `shift` rows.
+ * e.g. shiftFormulaRow('IF(J45="No Date","",K45)', 1) → 'IF(J46="No Date","",K46)'
+ * Used to clone the Status (H) and Days to Expire (K) formulas into new rows.
+ */
+function shiftFormulaRow(formula: string, shift: number): string {
+  return formula.replace(/([A-Z]+)(\d+)/g, (_m, col, row) =>
+    `${col}${parseInt(row, 10) + shift}`
+  );
+}
+
+/**
+ * Deep-clone cell style + data validation without copying ExcelJS internal
+ * proxy IDs. `{...cell.style}` copies proxy references and corrupts XML.
  */
 function safeCopyStyleAndValidation(
   sourceCell: ExcelJS.Cell,
@@ -121,74 +159,30 @@ function safeCopyStyleAndValidation(
   }
 }
 
-/**
- * Normalize a header cell value for column map lookup.
- */
 function normalizeHeader(value: unknown): string {
   return String(value ?? '').toLowerCase().trim().replace(/\s+/g, ' ');
 }
 
 /**
- * Apply the 3-year rule: if expiryDate is missing but issueDate exists,
- * expiry is assumed to be 3 years from the issue date.
- */
-function resolveExpiryDate(cert: CertificateData): string {
-  if (cert.expiryDate && cert.expiryDate !== 'Not Found') return cert.expiryDate;
-  if (cert.issueDate && cert.issueDate !== 'Not Found') {
-    const issued = new Date(cert.issueDate);
-    if (!isNaN(issued.getTime())) {
-      issued.setFullYear(issued.getFullYear() + 3);
-      return issued.toISOString().slice(0, 10);
-    }
-  }
-  return '';
-}
-
-function calcDaysToExpiry(expiryDate: string): number | null {
-  if (!expiryDate) return null;
-  const expiry = new Date(expiryDate);
-  if (isNaN(expiry.getTime())) return null;
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  return Math.floor((expiry.getTime() - today.getTime()) / 86_400_000);
-}
-
-function getStatus(days: number | null): string {
-  if (days === null) return 'Unknown';
-  return days < 0 ? 'Expired' : 'Up to date';
-}
-
-/**
- * Parse a date string safely.
- * Returns a Date object if valid (ExcelJS writes it as a proper Excel date serial).
- * Returns the original string if it can't be parsed (e.g. "No Date").
- * Returns null for empty / "Not Found".
- */
-function parseDateValue(dateStr: string): Date | string | null {
-  if (!dateStr || dateStr === 'Not Found' || dateStr === 'No Date') return null;
-  const d = new Date(dateStr);
-  if (!isNaN(d.getTime())) return d;
-  return dateStr;
-}
-
-/**
- * Find the worksheet that contains supplier data.
- * Scans all sheets for "Supplier Name" or "Supplier Account" in the first 10 rows.
+ * Find the data worksheet. Tries exact name "Certs 2025" first (§2 of rulebook),
+ * then scans all sheets for "Supplier Name" header.
  */
 function findDataSheet(workbook: ExcelJS.Workbook): ExcelJS.Worksheet | undefined {
+  // Exact name match per rulebook
+  const exact = workbook.getWorksheet('Certs 2025');
+  if (exact) return exact;
+
+  // Fallback: header scan
   for (const ws of workbook.worksheets) {
     for (let r = 1; r <= Math.min(10, ws.rowCount); r++) {
       let found = false;
       ws.getRow(r).eachCell({ includeEmpty: false }, (cell) => {
         const val = normalizeHeader(cell.value);
-        if (val.includes('supplier name') || val.includes('supplier account')) {
-          found = true;
-        }
+        if (val.includes('supplier name') || val.includes('supplier account')) found = true;
       });
       if (found) return ws;
     }
   }
-  // Fallback: first sheet that isn't "Instructions"
   return (
     workbook.worksheets.find(ws => ws.name.toLowerCase() !== 'instructions') ??
     workbook.worksheets[0]
@@ -196,7 +190,7 @@ function findDataSheet(workbook: ExcelJS.Workbook): ExcelJS.Worksheet | undefine
 }
 
 /**
- * Scan the first 10 rows of a sheet to find the header row.
+ * Scan the first 10 rows of a sheet for the header row.
  * Returns headerRowNum (1-based) and columnMap (normalizedHeader → 1-based col number).
  */
 function findHeaderInfo(ws: ExcelJS.Worksheet): {
@@ -213,29 +207,44 @@ function findHeaderInfo(ws: ExcelJS.Worksheet): {
     });
     if (hasSupplierName) return { headerRowNum: r, columnMap };
   }
-  // V7 defaults (1-based column numbers)
+  // V10 defaults — header row 3, 1-based column numbers (per §2 rulebook)
   return {
     headerRowNum: 3,
     columnMap: {
-      'supplier account': 1,
-      'supplier name':    2,
-      'country':          3,
-      'scope':            4,
-      'measure':          5,
-      'certification':    6,
-      'product category': 7,
-      'status':           8,
-      'issued':           9,
-      'date of expiry':   10,
-      'days to expire':   11,
+      'supplier account':       1,
+      'supplier name':          2,
+      'country':                3,
+      // col 4 = Scope — intentionally NOT in map (§2: never write)
+      'measure':                5,
+      'certification':          6,
+      'product category':       7,
+      'status':                 8,   // formula-driven — DO NOT WRITE
+      'issued':                 9,
+      'date of expiry':         10,
+      'days to expire':         11,  // formula-driven — DO NOT WRITE
+      'contact person & email': 12,
+      'date request sent':      13,
+      'date received':          14,
+      'comments':               15,
     },
   };
 }
 
 /**
- * Main function: append extracted certificates to the original Master File
- * and download the modified workbook.
+ * Parse a date string to a Date object for ExcelJS (writes as proper Excel serial).
+ * Returns null for empty / "Not Found" / "No Date".
+ * Returns the original string if it can't be parsed as a date.
  */
+function parseDateValue(dateStr: string): Date | string | null {
+  if (!dateStr || dateStr === 'Not Found' || dateStr === 'No Date') return null;
+  const d = new Date(dateStr);
+  if (!isNaN(d.getTime())) return d;
+  return dateStr;
+}
+
+// -----------------------------------------------------------------------------
+// Main export
+// -----------------------------------------------------------------------------
 export async function appendToMasterExcel(
   originalBuffer: ArrayBuffer,
   certificates: CertificateData[],
@@ -246,70 +255,74 @@ export async function appendToMasterExcel(
     return;
   }
 
-  // Step 1: Apply Saurebh Filter + supplier name matching
+  // Step 1: Saurebh filter + supplier matching
   const { processedCertificates } = prepareExportData(certificates, supplierMap);
   if (processedCertificates.length === 0) {
     alert('No certificates remaining after deduplication');
     return;
   }
 
-  // Step 2: Strip drawing XML (anchored icons) so ExcelJS doesn't crash,
-  //         then load the cleaned buffer
+  // Step 2: Strip drawing XML (4-layer fix — see stripDrawings above)
   const cleanBuffer = await stripDrawings(originalBuffer);
+
+  // Step 3: Load with ExcelJS
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(cleanBuffer);
 
-  // Step 3: Find the data sheet
+  // Step 4: Locate the data sheet
   const ws = findDataSheet(workbook);
-  if (!ws) {
-    throw new Error('No data sheet found in Master File');
-  }
+  if (!ws) throw new Error('No data sheet found in Master File');
 
-  // Step 4: Find header row + build column map
+  // Step 5: Build column map
   const { headerRowNum, columnMap } = findHeaderInfo(ws);
 
-  // Helper: resolve column aliases → 1-based column number
   const colIdx = (aliases: string[]): number | undefined => {
-    for (const alias of aliases) {
-      if (columnMap[alias] !== undefined) return columnMap[alias];
+    for (const a of aliases) {
+      if (columnMap[a] !== undefined) return columnMap[a];
     }
     return undefined;
   };
 
+  // Intentionally NOT mapping: scope (D), status (H), daysToExpire (K)
   const cols = {
     supplierAccount: colIdx(['supplier account', 'account']),
     supplierName:    colIdx(['supplier name', 'supplier']),
     country:         colIdx(['country']),
-    scope:           colIdx(['scope']),
     measure:         colIdx(['measure']),
     certification:   colIdx(['certification', 'certification ']),
     productCategory: colIdx(['product category', 'product category ']),
-    status:          colIdx(['status']),
     issued:          colIdx(['issued', 'date issued', 'issue date']),
     dateOfExpiry:    colIdx(['date of expiry', 'expiry date', 'expiry']),
-    daysToExpire:    colIdx(['days to expire', 'days to expiry']),
+    comments:        colIdx(['comments', 'comment']),
   };
 
-  // Step 5: Find the last populated row — its style is used as the template
+  // Step 6: Append one row per certificate
   const lastRowNum = ws.lastRow?.number ?? headerRowNum;
   const templateRow = ws.getRow(lastRowNum);
 
-  // Step 6: Append one row per certificate
   for (let i = 0; i < processedCertificates.length; i++) {
     const cert = processedCertificates[i];
-    const expiryDate = resolveExpiryDate(cert);
-    const days = calcDaysToExpiry(expiryDate);
-    const status = getStatus(days);
-
     const targetRowNum = lastRowNum + 1 + i;
-    const newRow = ws.getRow(targetRowNum);
+    const rowShift    = targetRowNum - lastRowNum;
+    const newRow      = ws.getRow(targetRowNum);
 
-    // ACTION 1: Deep-safe style + validation copy (no proxy ID bleed)
+    // PASS 1 — Copy styles from template row (deep-safe clone)
     templateRow.eachCell({ includeEmpty: true }, (templateCell, colNumber) => {
       safeCopyStyleAndValidation(templateCell, newRow.getCell(colNumber));
     });
 
-    // ACTION 2: Set values cell-by-cell (never addRow, never undefined)
+    // PASS 2 — Copy formulas from template row, shifting row numbers by rowShift.
+    //   This preserves col H (Status) and col K (Days to Expire) as live formulas.
+    //   Example: IF(J500="No Date","",…) → IF(J501="No Date","",…) for row 501.
+    templateRow.eachCell({ includeEmpty: true }, (templateCell, colNumber) => {
+      if (templateCell.type === ExcelJS.ValueType.Formula && templateCell.formula) {
+        const shifted = shiftFormulaRow(templateCell.formula, rowShift);
+        newRow.getCell(colNumber).value = { formula: shifted, result: undefined };
+      }
+    });
+
+    // PASS 3 — Write data values (overrides template data values for data columns;
+    //   H and K keep their formulas from PASS 2 because we never call setCell on them)
     const setCell = (colIndex: number | undefined, value: ExcelJS.CellValue | null) => {
       if (colIndex === undefined) return;
       newRow.getCell(colIndex).value = value ?? null;
@@ -318,23 +331,55 @@ export async function appendToMasterExcel(
     setCell(cols.supplierAccount, (cert as any)._matchedAccount || null);
     setCell(cols.supplierName,    cert.supplierName    || null);
     setCell(cols.country,         cert.country         || null);
-    setCell(cols.scope,           cert.scope           || null);
+    // col D (Scope): NEVER WRITE — rulebook §2 & §5
     setCell(cols.measure,         cert.measure         || null);
     setCell(cols.certification,   cert.certification   || null);
     setCell(cols.productCategory, cert.productCategory || null);
-    setCell(cols.status,          status);
+    // col H (Status): NEVER WRITE — formula from PASS 2
+    setCell(cols.issued, parseDateValue(cert.issueDate || ''));
 
-    // ACTION 3: Strict date types — Date object if valid, string fallback, null if empty
-    setCell(cols.issued,       parseDateValue(cert.issueDate || ''));
-    setCell(cols.dateOfExpiry, parseDateValue(expiryDate));
-    setCell(cols.daysToExpire, days !== null ? days : null);
+    // Expiry rule (§6): "No Date" if not stated — never null/empty
+    const expiryStr = cert.expiryDate && cert.expiryDate !== 'Not Found'
+      ? cert.expiryDate : '';
+    const expiryValue: ExcelJS.CellValue =
+      expiryStr ? (parseDateValue(expiryStr) ?? 'No Date') : 'No Date';
+    setCell(cols.dateOfExpiry, expiryValue);
+
+    // col K (Days to Expire): NEVER WRITE — formula from PASS 2
+
+    // Comments (O): filename + cert number if available
+    const commentParts: string[] = [];
+    if (cert.fileName)          commentParts.push(cert.fileName);
+    if (cert.certificateNumber) commentParts.push(`Cert #${cert.certificateNumber}`);
+    setCell(cols.comments, commentParts.join(' | ') || null);
 
     newRow.commit();
   }
 
-  console.log(`Appended ${processedCertificates.length} rows to sheet "${ws.name}"`);
+  console.log(
+    `[appendToMasterExcel] Appended ${processedCertificates.length} row(s) to "${ws.name}"`
+  );
 
-  // Step 7: Write and download
+  // Step 7: Update Log (§12)
+  const logSheet = workbook.getWorksheet('Update Log');
+  if (logSheet) {
+    const now = new Date();
+    const timestamp = `${now.toISOString().slice(0, 10)} ${now.toTimeString().slice(0, 5)}`;
+    const first = processedCertificates[0];
+    const lastLog = logSheet.lastRow?.number ?? 0;
+    const logRow  = logSheet.getRow(lastLog + 1);
+    logRow.getCell(1).value = timestamp;
+    logRow.getCell(2).value = (first as any)._matchedAccount || '';
+    logRow.getCell(3).value = first.supplierName || '';
+    logRow.getCell(4).value = `Inserted ${processedCertificates.length} certificate(s)`;
+    logRow.getCell(5).value = 'Appended via Vexos Engine. Expiry rules applied.';
+    logRow.commit();
+    console.log(`[appendToMasterExcel] Update Log row added at ${lastLog + 1}`);
+  } else {
+    console.warn('[appendToMasterExcel] "Update Log" sheet not found — skipping');
+  }
+
+  // Step 8: Write and download
   const buffer = await workbook.xlsx.writeBuffer();
   const blob = new Blob([buffer as ArrayBuffer], {
     type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
