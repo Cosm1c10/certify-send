@@ -1,4 +1,4 @@
-import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
 import { CertificateData } from '@/types/certificate';
 import { DynamicSupplierMap } from '@/utils/masterFileParser';
@@ -6,10 +6,33 @@ import { prepareExportData } from '@/utils/exportExcel';
 
 // =============================================================================
 // APPEND TO MASTER EXCEL
-// Reads the original Master File using SheetJS (robust, no 'anchors' bug),
-// appends new certificate rows to the data sheet, and downloads the modified
-// workbook. cellStyles is intentionally disabled to preserve named ranges.
+// Reads the original Master File using ExcelJS, finds the data sheet,
+// appends new certificate rows at the bottom with safe style inheritance,
+// and downloads the modified workbook — zero repair dialogs.
 // =============================================================================
+
+/**
+ * Deep-clone cell style and data validation without copying ExcelJS internal
+ * proxy IDs or XML references. Using `{ ...cell.style }` copies those refs
+ * and produces a corrupted workbook on write.
+ */
+function safeCopyStyleAndValidation(
+  sourceCell: ExcelJS.Cell,
+  targetCell: ExcelJS.Cell
+): void {
+  if (sourceCell.style) {
+    targetCell.style = {
+      font:      sourceCell.style.font      ? JSON.parse(JSON.stringify(sourceCell.style.font))      : undefined,
+      border:    sourceCell.style.border    ? JSON.parse(JSON.stringify(sourceCell.style.border))    : undefined,
+      fill:      sourceCell.style.fill      ? JSON.parse(JSON.stringify(sourceCell.style.fill))      : undefined,
+      alignment: sourceCell.style.alignment ? JSON.parse(JSON.stringify(sourceCell.style.alignment)) : undefined,
+      numFmt:    sourceCell.style.numFmt,
+    };
+  }
+  if (sourceCell.dataValidation) {
+    targetCell.dataValidation = JSON.parse(JSON.stringify(sourceCell.dataValidation));
+  }
+}
 
 /**
  * Normalize a header cell value for column map lookup.
@@ -49,62 +72,75 @@ function getStatus(days: number | null): string {
 }
 
 /**
- * Find the sheet name that contains supplier data by scanning for
- * "Supplier Name" or "Supplier Account" in the first 10 rows.
+ * Parse a date string safely.
+ * Returns a Date object if valid (ExcelJS writes it as a proper Excel date serial).
+ * Returns the original string if it can't be parsed (e.g. "No Date").
+ * Returns null for empty / "Not Found".
  */
-function findDataSheetName(workbook: XLSX.WorkBook): string {
-  for (const name of workbook.SheetNames) {
-    const ws = workbook.Sheets[name];
-    if (!ws) continue;
-    const rows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1 });
-    for (let r = 0; r < Math.min(10, rows.length); r++) {
-      for (const cell of (rows[r] || [])) {
-        const val = normalizeHeader(cell);
+function parseDateValue(dateStr: string): Date | string | null {
+  if (!dateStr || dateStr === 'Not Found' || dateStr === 'No Date') return null;
+  const d = new Date(dateStr);
+  if (!isNaN(d.getTime())) return d;
+  return dateStr;
+}
+
+/**
+ * Find the worksheet that contains supplier data.
+ * Scans all sheets for "Supplier Name" or "Supplier Account" in the first 10 rows.
+ */
+function findDataSheet(workbook: ExcelJS.Workbook): ExcelJS.Worksheet | undefined {
+  for (const ws of workbook.worksheets) {
+    for (let r = 1; r <= Math.min(10, ws.rowCount); r++) {
+      let found = false;
+      ws.getRow(r).eachCell({ includeEmpty: false }, (cell) => {
+        const val = normalizeHeader(cell.value);
         if (val.includes('supplier name') || val.includes('supplier account')) {
-          return name;
+          found = true;
         }
-      }
+      });
+      if (found) return ws;
     }
   }
   // Fallback: first sheet that isn't "Instructions"
-  return workbook.SheetNames.find(n => n.toLowerCase() !== 'instructions')
-    ?? workbook.SheetNames[0];
+  return (
+    workbook.worksheets.find(ws => ws.name.toLowerCase() !== 'instructions') ??
+    workbook.worksheets[0]
+  );
 }
 
 /**
  * Scan the first 10 rows of a sheet to find the header row.
- * Returns headerRowIndex (0-based) and columnMap (normalizedHeader → 0-based col index).
+ * Returns headerRowNum (1-based) and columnMap (normalizedHeader → 1-based col number).
  */
-function findHeaderInfo(rows: any[][]): {
-  headerRowIndex: number;
+function findHeaderInfo(ws: ExcelJS.Worksheet): {
+  headerRowNum: number;
   columnMap: Record<string, number>;
 } {
-  for (let r = 0; r < Math.min(10, rows.length); r++) {
-    const row = rows[r] || [];
+  for (let r = 1; r <= Math.min(10, ws.rowCount); r++) {
     const columnMap: Record<string, number> = {};
     let hasSupplierName = false;
-    for (let c = 0; c < row.length; c++) {
-      const normalized = normalizeHeader(row[c]);
-      columnMap[normalized] = c;
+    ws.getRow(r).eachCell({ includeEmpty: false }, (cell, colNumber) => {
+      const normalized = normalizeHeader(cell.value);
+      columnMap[normalized] = colNumber;
       if (normalized.includes('supplier name')) hasSupplierName = true;
-    }
-    if (hasSupplierName) return { headerRowIndex: r, columnMap };
+    });
+    if (hasSupplierName) return { headerRowNum: r, columnMap };
   }
-  // V7 defaults (0-based)
+  // V7 defaults (1-based column numbers)
   return {
-    headerRowIndex: 2,
+    headerRowNum: 3,
     columnMap: {
-      'supplier account': 0,
-      'supplier name': 1,
-      'country': 2,
-      'scope': 3,
-      'measure': 4,
-      'certification': 5,
-      'product category': 6,
-      'status': 7,
-      'issued': 8,
-      'date of expiry': 9,
-      'days to expire': 10,
+      'supplier account': 1,
+      'supplier name':    2,
+      'country':          3,
+      'scope':            4,
+      'measure':          5,
+      'certification':    6,
+      'product category': 7,
+      'status':           8,
+      'issued':           9,
+      'date of expiry':   10,
+      'days to expire':   11,
     },
   };
 }
@@ -130,25 +166,20 @@ export async function appendToMasterExcel(
     return;
   }
 
-  // Step 2: Load the workbook with SheetJS (handles complex Excel files without 'anchors' bug)
-  // NOTE: cellStyles: true is intentionally omitted — it corrupts named ranges in the workbook
-  const workbook = XLSX.read(originalBuffer, {
-    type: 'array',
-    bookVBA: false,
-  });
+  // Step 2: Load workbook with ExcelJS
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(originalBuffer);
 
   // Step 3: Find the data sheet
-  const sheetName = findDataSheetName(workbook);
-  const ws = workbook.Sheets[sheetName];
+  const ws = findDataSheet(workbook);
   if (!ws) {
-    throw new Error(`Sheet "${sheetName}" not found in Master File`);
+    throw new Error('No data sheet found in Master File');
   }
 
-  // Step 4: Find header row + column positions
-  const allRows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1 });
-  const { headerRowIndex, columnMap } = findHeaderInfo(allRows);
+  // Step 4: Find header row + build column map
+  const { headerRowNum, columnMap } = findHeaderInfo(ws);
 
-  // Helper: resolve column alias → 0-based index
+  // Helper: resolve column aliases → 1-based column number
   const colIdx = (aliases: string[]): number | undefined => {
     for (const alias of aliases) {
       if (columnMap[alias] !== undefined) return columnMap[alias];
@@ -170,8 +201,9 @@ export async function appendToMasterExcel(
     daysToExpire:    colIdx(['days to expire', 'days to expiry']),
   };
 
-  // Step 5: Find the current data range
-  const range = XLSX.utils.decode_range(ws['!ref'] || 'A1');
+  // Step 5: Find the last populated row — its style is used as the template
+  const lastRowNum = ws.lastRow?.number ?? headerRowNum;
+  const templateRow = ws.getRow(lastRowNum);
 
   // Step 6: Append one row per certificate
   for (let i = 0; i < processedCertificates.length; i++) {
@@ -180,47 +212,42 @@ export async function appendToMasterExcel(
     const days = calcDaysToExpiry(expiryDate);
     const status = getStatus(days);
 
-    // New row index (0-based), one after the current last row
-    const newRowIdx = range.e.r + 1;
+    const targetRowNum = lastRowNum + 1 + i;
+    const newRow = ws.getRow(targetRowNum);
 
-    // Set cell values by column position
-    const setCell = (colIndex: number | undefined, value: unknown) => {
-      if (colIndex === undefined || value === undefined || value === null || value === '') return;
-      const addr = XLSX.utils.encode_cell({ r: newRowIdx, c: colIndex });
-      if (!ws[addr]) ws[addr] = {};
-      ws[addr].t = typeof value === 'number' ? 'n' : 's';
-      ws[addr].v = value;
+    // ACTION 1: Deep-safe style + validation copy (no proxy ID bleed)
+    templateRow.eachCell({ includeEmpty: true }, (templateCell, colNumber) => {
+      safeCopyStyleAndValidation(templateCell, newRow.getCell(colNumber));
+    });
+
+    // ACTION 2: Set values cell-by-cell (never addRow, never undefined)
+    const setCell = (colIndex: number | undefined, value: ExcelJS.CellValue | null) => {
+      if (colIndex === undefined) return;
+      newRow.getCell(colIndex).value = value ?? null;
     };
 
-    setCell(cols.supplierAccount, (cert as any)._matchedAccount ?? '');
-    setCell(cols.supplierName,    cert.supplierName);
-    setCell(cols.country,         cert.country);
-    setCell(cols.scope,           cert.scope);
-    setCell(cols.measure,         cert.measure);
-    setCell(cols.certification,   cert.certification);
-    setCell(cols.productCategory, cert.productCategory);
+    setCell(cols.supplierAccount, (cert as any)._matchedAccount || null);
+    setCell(cols.supplierName,    cert.supplierName    || null);
+    setCell(cols.country,         cert.country         || null);
+    setCell(cols.scope,           cert.scope           || null);
+    setCell(cols.measure,         cert.measure         || null);
+    setCell(cols.certification,   cert.certification   || null);
+    setCell(cols.productCategory, cert.productCategory || null);
     setCell(cols.status,          status);
-    setCell(cols.issued,          cert.issueDate || '');
-    setCell(cols.dateOfExpiry,    expiryDate || '');
-    setCell(cols.daysToExpire,    days !== null ? days : '');
 
-    // Expand the sheet range to include the new row
-    range.e.r = newRowIdx;
+    // ACTION 3: Strict date types — Date object if valid, string fallback, null if empty
+    setCell(cols.issued,       parseDateValue(cert.issueDate || ''));
+    setCell(cols.dateOfExpiry, parseDateValue(expiryDate));
+    setCell(cols.daysToExpire, days !== null ? days : null);
+
+    newRow.commit();
   }
 
-  // Update the sheet's !ref to include new rows
-  ws['!ref'] = XLSX.utils.encode_range(range);
-
-  console.log(`Appended ${processedCertificates.length} rows to sheet "${sheetName}"`);
+  console.log(`Appended ${processedCertificates.length} rows to sheet "${ws.name}"`);
 
   // Step 7: Write and download
-  // NOTE: cellStyles: true omitted to preserve named ranges + workbook metadata integrity
-  const output = XLSX.write(workbook, {
-    type: 'array',
-    bookType: 'xlsx',
-  });
-
-  const blob = new Blob([output], {
+  const buffer = await workbook.xlsx.writeBuffer();
+  const blob = new Blob([buffer as ArrayBuffer], {
     type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   });
   const today = new Date().toISOString().slice(0, 10);
