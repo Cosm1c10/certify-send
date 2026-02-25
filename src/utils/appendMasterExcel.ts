@@ -726,10 +726,6 @@ export async function appendToMasterExcel(
 
   // ── In-memory tracking for this batch run ────────────────────────────────────
   //
-  //   processedCertTypesThisSession
-  //     Blocks re-inserting the same cert type when the user uploads duplicate
-  //     files in one batch.  Key: measure|cert|product|filename.
-  //
   //   newBlockStartedFor
   //     Tracks which supplier keys have already had their first (Account/Name/
   //     Country) row written, so subsequent certs in the block get blank A/B/C.
@@ -758,26 +754,11 @@ export async function appendToMasterExcel(
   //     Stores whether the supplier's block pre-existed in the sheet (needed to
   //     decide: run update-in-place check vs. always-insert for new suppliers).
   // ─────────────────────────────────────────────────────────────────────────────
-  const processedCertTypesThisSession = new Set<string>();
   const newBlockStartedFor            = new Set<string>();
   const batchInsertPtr                = new Map<string, number>();
   const batchSupplierWasFound         = new Map<string, boolean>();
 
   for (const cert of processedCertificates) {
-    // ── In-session duplicate prevention ──────────────────────────────────────
-    // Key: measure|cert|product|filename — identical files re-uploaded in the
-    // same batch are skipped, but two DIFFERENT products with the same cert type
-    // (e.g. OK Compost Cups vs OK Compost Containers) each get their own row.
-    const certKey = (cert.measure || '') + '|' + (cert.certification || '')
-      + '|' + (cert.productCategory || '') + '|' + (cert.fileName || '');
-    if (processedCertTypesThisSession.has(certKey)) {
-      console.log(
-        `[appendToMasterExcel] Skipping in-session duplicate: "${certKey}" (${cert.fileName})`
-      );
-      continue;
-    }
-    processedCertTypesThisSession.add(certKey);
-
     const overrideAccount: string | undefined = (cert as any)._matchedAccount || undefined;
     const supplierKey = overrideAccount || cert.supplierName || '';
 
@@ -890,6 +871,11 @@ export async function appendToMasterExcel(
 
     const newRow   = ws.getRow(insertAt);
     const aboveRow = ws.getRow(insertAt - 1);
+
+    // Inherit row height so new rows blend in visually
+    if (aboveRow.height) {
+      newRow.height = aboveRow.height;
+    }
 
     // PASS 1 — Copy styles from the row directly above (deep-safe clone)
     aboveRow.eachCell({ includeEmpty: true }, (aboveCell, colNumber) => {
