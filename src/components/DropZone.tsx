@@ -253,111 +253,121 @@ const DropZone = ({ onFilesProcess, isProcessing, processingProgress }: DropZone
     return 0;
   };
 
-  return (
-    <div
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
-      className={cn(
-        "relative border-2 border-dashed rounded-xl transition-all duration-300 cursor-pointer",
-        "flex flex-col items-center justify-center gap-3 sm:gap-4",
-        "min-h-[140px] sm:min-h-[180px] py-6 sm:py-10 px-4",
-        isDragging
-          ? "border-yellow-500 bg-yellow-50/50"
-          : "border-gray-200 hover:border-gray-300 bg-gray-50/50 hover:bg-gray-100/50",
-        (isProcessing || isConverting) && "pointer-events-none"
-      )}
-    >
-      {/* Standard file picker — covers the entire dropzone for click-to-browse */}
-      <input
-        type="file"
-        accept=".pdf,.jpg,.jpeg,.png,.docx"
-        multiple
-        onChange={handleFileSelect}
-        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-        disabled={isProcessing || isConverting}
-      />
+  const busy = isProcessing || isConverting;
 
-      {/* Fallback folder picker for browsers without showDirectoryPicker */}
+  return (
+    <>
+      {/* ── Drag-and-drop / click-to-browse zone ─────────────────────────── */}
+      <div
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        className={cn(
+          "relative border-2 border-dashed rounded-xl transition-all duration-300 cursor-pointer",
+          "flex flex-col items-center justify-center gap-3 sm:gap-4",
+          "min-h-[140px] sm:min-h-[180px] py-6 sm:py-10 px-4",
+          isDragging
+            ? "border-yellow-500 bg-yellow-50/50"
+            : "border-gray-200 hover:border-gray-300 bg-gray-50/50 hover:bg-gray-100/50",
+          busy && "pointer-events-none"
+        )}
+      >
+        {/* Invisible overlay — captures clicks anywhere in the dropzone */}
+        <input
+          type="file"
+          accept=".pdf,.jpg,.jpeg,.png,.docx"
+          multiple
+          onChange={handleFileSelect}
+          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+          disabled={busy}
+        />
+
+        {busy ? (
+          <div className="flex flex-col items-center gap-3 sm:gap-4 px-4 sm:px-8 w-full max-w-md">
+            <div className="w-10 h-10 sm:w-14 sm:h-14 rounded-full bg-yellow-100 flex items-center justify-center">
+              <Loader2 className="w-5 h-5 sm:w-7 sm:h-7 text-yellow-600 animate-spin" />
+            </div>
+            <div className="text-center">
+              <p className="text-sm sm:text-base font-medium text-gray-900 mb-1">
+                {getProgressText()}
+              </p>
+              <p className="text-xs sm:text-sm text-gray-500">
+                Please wait while we process your documents
+              </p>
+            </div>
+            <div className="w-full h-1.5 sm:h-2 bg-gray-200 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-yellow-500 rounded-full transition-all duration-300 ease-out"
+                style={{ width: `${getProgressPercentage()}%` }}
+              />
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className={cn(
+              "w-10 h-10 sm:w-14 sm:h-14 rounded-xl flex items-center justify-center transition-colors",
+              isDragging ? "bg-yellow-100" : "bg-gray-100"
+            )}>
+              {isDragging ? (
+                <FileUp className="w-5 h-5 sm:w-7 sm:h-7 text-yellow-600" />
+              ) : (
+                <Upload className="w-5 h-5 sm:w-7 sm:h-7 text-gray-400" />
+              )}
+            </div>
+            <div className="text-center">
+              <p className="text-sm sm:text-base font-medium text-gray-900">
+                {isDragging ? 'Drop your files here' : 'Drop certificates here'}
+              </p>
+              <p className="text-xs sm:text-sm text-gray-500 mt-1">
+                or <span className="text-yellow-600 font-medium">tap to browse files</span>
+              </p>
+            </div>
+            <div className="flex items-center gap-2 text-[10px] sm:text-xs text-gray-400">
+              <span className="px-1.5 sm:px-2 py-0.5 bg-gray-100 rounded">PDF</span>
+              <span className="px-1.5 sm:px-2 py-0.5 bg-gray-100 rounded">DOCX</span>
+              <span className="px-1.5 sm:px-2 py-0.5 bg-gray-100 rounded">JPG</span>
+              <span className="px-1.5 sm:px-2 py-0.5 bg-gray-100 rounded">PNG</span>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/*
+        ── Standalone folder picker ────────────────────────────────────────
+        Placed OUTSIDE the dropzone div so the invisible overlay input above
+        cannot intercept clicks on this button. No z-index tricks required.
+      */}
+
+      {/* Hidden input: fallback for Firefox / browsers without showDirectoryPicker */}
       {/* @ts-expect-error webkitdirectory / directory not in React InputHTMLAttributes */}
       <input
         ref={folderInputRef}
         type="file"
         style={{ display: 'none' }}
         multiple
-        webkitdirectory=""
-        directory=""
+        webkitdirectory="true"
+        directory="true"
         onChange={handleFolderInputChange}
-        disabled={isProcessing || isConverting}
+        disabled={busy}
       />
 
-      {(isProcessing || isConverting) ? (
-        <div className="flex flex-col items-center gap-3 sm:gap-4 px-4 sm:px-8 w-full max-w-md">
-          <div className="relative">
-            <div className="w-10 h-10 sm:w-14 sm:h-14 rounded-full bg-yellow-100 flex items-center justify-center">
-              <Loader2 className="w-5 h-5 sm:w-7 sm:h-7 text-yellow-600 animate-spin" />
-            </div>
-          </div>
-          <div className="text-center">
-            <p className="text-sm sm:text-base font-medium text-gray-900 mb-1">
-              {getProgressText()}
-            </p>
-            <p className="text-xs sm:text-sm text-gray-500">
-              Please wait while we process your documents
-            </p>
-          </div>
-          {/* Progress Bar */}
-          <div className="w-full h-1.5 sm:h-2 bg-gray-200 rounded-full overflow-hidden">
-            <div
-              className="h-full bg-yellow-500 rounded-full transition-all duration-300 ease-out"
-              style={{ width: `${getProgressPercentage()}%` }}
-            />
-          </div>
-        </div>
-      ) : (
-        <>
-          <div className={cn(
-            "w-10 h-10 sm:w-14 sm:h-14 rounded-xl flex items-center justify-center transition-colors",
-            isDragging ? "bg-yellow-100" : "bg-gray-100"
-          )}>
-            {isDragging ? (
-              <FileUp className="w-5 h-5 sm:w-7 sm:h-7 text-yellow-600" />
-            ) : (
-              <Upload className="w-5 h-5 sm:w-7 sm:h-7 text-gray-400" />
-            )}
-          </div>
-          <div className="text-center">
-            <p className="text-sm sm:text-base font-medium text-gray-900">
-              {isDragging ? 'Drop your files here' : 'Drop certificates here'}
-            </p>
-            <div className="flex items-center justify-center gap-2 mt-1">
-              <p className="text-xs sm:text-sm text-gray-500">
-                or <span className="text-yellow-600 font-medium">tap to browse</span>
-              </p>
-              <span className="text-gray-300 select-none">·</span>
-              {/*
-                relative z-10 places this button above the invisible overlay input.
-                e.stopPropagation() prevents the click from bubbling to that overlay.
-              */}
-              <button
-                type="button"
-                onClick={handleFolderButtonClick}
-                className="relative z-10 flex items-center gap-1 text-xs sm:text-sm text-yellow-600 font-medium hover:text-yellow-700 transition-colors"
-              >
-                <FolderOpen className="w-3.5 h-3.5" />
-                Select Folder
-              </button>
-            </div>
-          </div>
-          <div className="flex items-center gap-2 text-[10px] sm:text-xs text-gray-400">
-            <span className="px-1.5 sm:px-2 py-0.5 bg-gray-100 rounded">PDF</span>
-            <span className="px-1.5 sm:px-2 py-0.5 bg-gray-100 rounded">DOCX</span>
-            <span className="px-1.5 sm:px-2 py-0.5 bg-gray-100 rounded">JPG</span>
-            <span className="px-1.5 sm:px-2 py-0.5 bg-gray-100 rounded">PNG</span>
-          </div>
-        </>
-      )}
-    </div>
+      <button
+        type="button"
+        onClick={handleFolderButtonClick}
+        disabled={busy}
+        className={cn(
+          "w-full mt-2 flex items-center justify-center gap-2",
+          "py-2.5 px-4 rounded-xl border-2 border-dashed",
+          "text-sm font-medium transition-all duration-200",
+          busy
+            ? "border-gray-200 text-gray-300 cursor-not-allowed"
+            : "border-yellow-300 text-yellow-700 bg-yellow-50/60 hover:bg-yellow-100/70 hover:border-yellow-400 cursor-pointer"
+        )}
+      >
+        <FolderOpen className="w-4 h-4" />
+        Select Folder
+      </button>
+    </>
   );
 };
 
