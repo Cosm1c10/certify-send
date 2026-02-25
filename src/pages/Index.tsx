@@ -1,6 +1,10 @@
 import { useState } from 'react';
-import { Download, ShieldCheck, RotateCcw, AlertCircle, FileSearch, Zap, Globe, FileSpreadsheet } from 'lucide-react';
+import { Download, ShieldCheck, RotateCcw, AlertCircle, FileSearch, Zap, Globe, FileSpreadsheet, ChevronsUpDown, Check, X, UserCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
+import { cn } from '@/lib/utils';
 import DropZone from '@/components/DropZone';
 import ReviewTable from '@/components/ReviewTable';
 import MasterFileSync from '@/components/MasterFileSync';
@@ -9,6 +13,7 @@ import { useCertificates } from '@/hooks/useCertificates';
 import { useMasterFile } from '@/hooks/useMasterFile';
 import { exportToExcel, prepareExportData, NewSupplierInfo } from '@/utils/exportExcel';
 import { exportFeederExcel } from '@/utils/exportFeederExcel';
+import { appendToMasterExcel } from '@/utils/appendMasterExcel';
 
 const Index = () => {
   // Master File must be initialized FIRST so we can pass supplierMap to useCertificates
@@ -31,6 +36,10 @@ const Index = () => {
 
   const [feederStats, setFeederStats] = useState<{ matched: number; newSuppliers: number } | null>(null);
 
+  // Supplier override state (broker/manufacturer workflow)
+  const [selectedSupplierOverride, setSelectedSupplierOverride] = useState('');
+  const [comboboxOpen, setComboboxOpen] = useState(false);
+
   // New Suppliers Dialog state
   const [showNewSuppliersDialog, setShowNewSuppliersDialog] = useState(false);
   const [detectedNewSuppliers, setDetectedNewSuppliers] = useState<NewSupplierInfo[]>([]);
@@ -42,10 +51,15 @@ const Index = () => {
 
     if (pendingExportType === 'excel') {
       try {
-        await exportToExcel(certificates, masterFile.supplierMap);
+        if (masterFile.rawBuffer) {
+          await appendToMasterExcel(masterFile.rawBuffer, certificates, masterFile.supplierMap);
+        } else {
+          await exportToExcel(certificates, masterFile.supplierMap);
+        }
       } catch (error) {
         console.error('Export failed:', error);
-        alert('Failed to export Excel file');
+        const msg = error instanceof Error ? error.message : String(error);
+        alert(`Failed to export Excel file:\n\n${msg}`);
       }
     } else if (pendingExportType === 'feeder') {
       try {
@@ -84,10 +98,15 @@ const Index = () => {
 
     // No new suppliers or no master file - proceed directly
     try {
-      await exportToExcel(certificates, masterFile.supplierMap);
+      if (masterFile.rawBuffer) {
+        await appendToMasterExcel(masterFile.rawBuffer, certificates, masterFile.supplierMap);
+      } else {
+        await exportToExcel(certificates, masterFile.supplierMap);
+      }
     } catch (error) {
       console.error('Export failed:', error);
-      alert('Failed to export Excel file');
+      const msg = error instanceof Error ? error.message : String(error);
+      alert(`Failed to export Excel file:\n\n${msg}`);
     }
   };
 
@@ -203,8 +222,111 @@ const Index = () => {
             </p>
           </div>
 
+          {/* Supplier Override Input — assign all uploaded PDFs to a specific supplier */}
+          <div className="mb-4">
+            <label className="block text-xs font-medium text-gray-600 mb-1.5">
+              <UserCheck className="inline w-3.5 h-3.5 mr-1 text-gray-400" />
+              Assign to Supplier Account
+              <span className="text-gray-400 font-normal ml-1">(Optional — overrides AI extraction)</span>
+            </label>
+
+            {masterFile.isLoaded ? (
+              /* Searchable combobox when Master File is loaded */
+              <Popover open={comboboxOpen} onOpenChange={setComboboxOpen}>
+                <PopoverTrigger asChild>
+                  <button
+                    type="button"
+                    className={cn(
+                      "w-full flex items-center justify-between rounded-lg border px-3 py-2 text-sm",
+                      "bg-white hover:bg-gray-50 transition-colors text-left",
+                      selectedSupplierOverride
+                        ? "border-yellow-400 bg-yellow-50/60 text-gray-900"
+                        : "border-gray-200 text-gray-400"
+                    )}
+                  >
+                    <span className={selectedSupplierOverride ? "text-gray-900 font-medium" : ""}>
+                      {selectedSupplierOverride || "Search supplier from Master File..."}
+                    </span>
+                    <div className="flex items-center gap-1 flex-shrink-0 ml-2">
+                      {selectedSupplierOverride && (
+                        <span
+                          role="button"
+                          tabIndex={0}
+                          onClick={(e) => { e.stopPropagation(); setSelectedSupplierOverride(''); }}
+                          onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); setSelectedSupplierOverride(''); } }}
+                          className="p-0.5 rounded hover:bg-yellow-200 text-yellow-700"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </span>
+                      )}
+                      <ChevronsUpDown className="w-3.5 h-3.5 text-gray-400" />
+                    </div>
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+                  <Command>
+                    <CommandInput placeholder="Search supplier name..." className="h-9" />
+                    <CommandList>
+                      <CommandEmpty>No supplier found.</CommandEmpty>
+                      <CommandGroup>
+                        {Object.values(masterFile.supplierMap)
+                          .map(e => e.officialName)
+                          .filter((name, i, arr) => arr.indexOf(name) === i) // dedupe
+                          .sort()
+                          .map(name => (
+                            <CommandItem
+                              key={name}
+                              value={name}
+                              onSelect={(val) => {
+                                setSelectedSupplierOverride(val === selectedSupplierOverride ? '' : val);
+                                setComboboxOpen(false);
+                              }}
+                            >
+                              <Check className={cn("mr-2 h-4 w-4", selectedSupplierOverride === name ? "opacity-100" : "opacity-0")} />
+                              {name}
+                            </CommandItem>
+                          ))
+                        }
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
+            ) : (
+              /* Plain text input when no Master File */
+              <div className="relative">
+                <Input
+                  type="text"
+                  placeholder="Type supplier name to override AI extraction..."
+                  value={selectedSupplierOverride}
+                  onChange={(e) => setSelectedSupplierOverride(e.target.value)}
+                  className={cn(
+                    "text-sm pr-8",
+                    selectedSupplierOverride && "border-yellow-400 bg-yellow-50/60"
+                  )}
+                />
+                {selectedSupplierOverride && (
+                  <button
+                    type="button"
+                    onClick={() => setSelectedSupplierOverride('')}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+            )}
+
+            {selectedSupplierOverride && (
+              <p className="text-xs text-yellow-700 mt-1 flex items-center gap-1">
+                <Check className="w-3 h-3" />
+                All uploaded certificates will be assigned to <strong>{selectedSupplierOverride}</strong>
+              </p>
+            )}
+          </div>
+
           <DropZone
-            onFilesProcess={analyzeCertificates}
+            onFilesProcess={(files) => analyzeCertificates(files, selectedSupplierOverride || undefined)}
             isProcessing={isProcessing}
             processingProgress={processingProgress}
           />

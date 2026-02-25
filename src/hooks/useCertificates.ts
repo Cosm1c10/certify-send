@@ -132,7 +132,7 @@ export const useCertificates = (supplierMap?: DynamicSupplierMap) => {
     };
   };
 
-  const analyzeCertificates = useCallback(async (files: FileWithBase64[]) => {
+  const analyzeCertificates = useCallback(async (files: FileWithBase64[], supplierOverride?: string) => {
     // Guard: Prevent double-triggering
     if (files.length === 0) return;
     if (isProcessingRef.current) {
@@ -142,7 +142,8 @@ export const useCertificates = (supplierMap?: DynamicSupplierMap) => {
 
     // Lock processing
     isProcessingRef.current = true;
-    console.log(`Starting batch processing for ${files.length} items`);
+    const overrideName = supplierOverride?.trim() || '';
+    console.log(`Starting batch processing for ${files.length} items${overrideName ? ` [Override: "${overrideName}"]` : ''}`);
 
     setIsProcessing(true);
     setProcessingProgress({ current: 0, total: files.length });
@@ -159,6 +160,21 @@ export const useCertificates = (supplierMap?: DynamicSupplierMap) => {
       try {
         console.log(`Processing ${i + 1}/${files.length}: ${file.name}`);
         const newCertificate = await processSingleCertificate(file, base64Image, textContent);
+
+        // SUPPLIER OVERRIDE: If the user explicitly assigned a supplier, use that name
+        // regardless of what the AI extracted (broker/manufacturer workflow)
+        if (overrideName) {
+          newCertificate.supplierName = overrideName;
+          // Also look up the account code from the Master File for the override name
+          const currentMap = supplierMapRef.current;
+          if (currentMap) {
+            const result = matchSupplier(overrideName, currentMap, 0.75);
+            if (result.wasMatched) {
+              (newCertificate as any)._matchedAccount = result.matchedAccount ?? '';
+            }
+          }
+        }
+
         newCertificates.push(newCertificate);
       } catch (error) {
         console.error(`Error processing ${file.name}:`, error);
@@ -168,11 +184,10 @@ export const useCertificates = (supplierMap?: DynamicSupplierMap) => {
     }
 
     // SUPPLIER NAME CORRECTION: Apply Master File matching before saving
-    // This is the "Fuzzy Match Override" — corrects raw AI names to exact Master File names
+    // Skip if supplierOverride is set — user already chose the correct name
     const currentMap = supplierMapRef.current;
     const mapSize = currentMap ? Object.keys(currentMap).length : 0;
-    console.log(`Supplier correction: ${mapSize} Master File entries available for ${newCertificates.length} certs`);
-    const correctedCertificates = (currentMap && mapSize > 0)
+    const correctedCertificates = (!overrideName && currentMap && mapSize > 0)
       ? newCertificates.map(cert => {
           const result = matchSupplier(cert.supplierName, currentMap, 0.75);
           if (result.wasMatched && result.matchedName !== cert.supplierName) {

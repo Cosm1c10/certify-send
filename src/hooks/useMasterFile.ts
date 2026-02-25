@@ -12,6 +12,7 @@ interface MasterFileState {
   fileName: string | null;
   totalSuppliers: number;
   supplierMap: DynamicSupplierMap;
+  rawBuffer: ArrayBuffer | null;  // Original file binary — used for "Append to Master" export
 }
 
 export const useMasterFile = () => {
@@ -20,6 +21,7 @@ export const useMasterFile = () => {
     fileName: null,
     totalSuppliers: 0,
     supplierMap: {},
+    rawBuffer: null,
   });
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -43,13 +45,16 @@ export const useMasterFile = () => {
       }
 
       console.log(`Loading Master File: ${file.name}`);
-      const data: MasterFileData = await parseMasterFile(file);
+      // Read buffer FIRST — needed for "Append to Master" export later
+      const rawBuffer = await file.arrayBuffer();
+      const data: MasterFileData = await parseMasterFile(file);  // parseMasterFile reads buffer internally too — both calls are fine
 
       setMasterFile({
         isLoaded: true,
         fileName: data.fileName,
         totalSuppliers: data.totalSuppliers,
         supplierMap: data.supplierMap,
+        rawBuffer,
       });
 
       console.log(`Master File loaded: ${data.totalSuppliers} suppliers mapped`);
@@ -62,6 +67,7 @@ export const useMasterFile = () => {
         fileName: null,
         totalSuppliers: 0,
         supplierMap: {},
+        rawBuffer: null,
       });
     } finally {
       setIsLoading(false);
@@ -77,6 +83,7 @@ export const useMasterFile = () => {
       fileName: null,
       totalSuppliers: 0,
       supplierMap: {},
+      rawBuffer: null,
     });
     setError(null);
   }, []);
