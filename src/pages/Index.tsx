@@ -248,7 +248,6 @@ const Index = () => {
             <label className="block text-xs font-medium text-gray-600 mb-1.5">
               <UserCheck className="inline w-3.5 h-3.5 mr-1 text-gray-400" />
               Assign to Supplier Account
-              <span className="text-gray-400 font-normal ml-1">(Optional — overrides AI extraction)</span>
             </label>
 
             {masterFile.isLoaded ? (
@@ -590,7 +589,7 @@ const Index = () => {
             <div className="text-center">
               <p className="text-white text-xs sm:text-sm font-medium">AI Compliance Intelligence Engine</p>
               <p className="text-slate-300 text-[10px] sm:text-xs mt-1">Automated Certificate Extraction & Validation</p>
-              <p className="text-slate-400 text-[10px] sm:text-xs mt-2 sm:mt-3">© 2026 AgenticFloww. All rights reserved.</p>
+              <p className="text-slate-400 text-[10px] sm:text-xs mt-2 sm:mt-3">© 2026 VexosAI. All rights reserved.</p>
             </div>
 
             {/* Version */}
