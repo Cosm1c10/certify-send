@@ -136,34 +136,6 @@ function shiftFormulaRow(formula: string, shift: number): string {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Cert-name fuzzy matching helpers
-// ---------------------------------------------------------------------------
-// Words that are too generic to count as a meaningful shared token between
-// two certificate names (e.g. both "ISO 9001 Certificate" and "BRC Certificate"
-// contain "certificate" — that doesn't make them the same cert).
-const CERT_STOP_WORDS = new Set([
-  'a', 'an', 'and', 'by', 'for', 'in', 'no', 'not', 'of', 'or', 'the', 'to', 'v',
-  'cert', 'certificate', 'certification', 'certified',
-  'standard', 'standards',
-  'audit', 'scheme', 'system', 'programme', 'program',
-  'quality', 'management',
-]);
-
-/**
- * Tokenise a (already-lowercased) cert name into meaningful words (≥3 chars,
- * not a stop word). Splits on whitespace, brackets, slashes, dots, colons, etc.
- * Returns a Set so intersection is O(n).
- */
-function extractCertTokens(s: string): Set<string> {
-  const tokens = new Set<string>();
-  for (const word of s.split(/[\s()\[\]\-,/.:;"']+/)) {
-    const w = word.trim();
-    if (w.length >= 3 && !CERT_STOP_WORDS.has(w)) tokens.add(w);
-  }
-  return tokens;
-}
-
 /**
  * Deep-clone cell style + data validation without copying ExcelJS internal
  * proxy IDs. `{...cell.style}` copies proxy references and corrupts XML.
@@ -375,7 +347,7 @@ function findInsertionRow(
   overrideAccount: string | undefined,
   supplierNameHint?: string,   // fallback: search by col B when account search fails
   productCategoryCol: number = 7
-): { insertAt: number; supplierFound: boolean; resolvedAccount: string | undefined } {
+): { insertAt: number; supplierFound: boolean; resolvedAccount: string | undefined; blockStartRow: number | undefined } {
   const trueLastRow = findTrueLastRow(ws, supplierAccountCol, supplierNameCol, certCol, headerRowNum + 1);
 
   // Helper: does a row carry visible cert/product data (i.e. is it a real sub-row)?
@@ -402,7 +374,8 @@ function findInsertionRow(
   // separator row (blank col A AND no cert/product data) or a different supplier.
   if (overrideAccount) {
     const normalizedTarget = overrideAccount.toLowerCase().trim();
-    let lastSupplierRow = -1;
+    let firstSupplierRow = -1;
+    let lastSupplierRow  = -1;
     let inBlock = false;
 
     for (let r = headerRowNum + 1; r <= trueLastRow; r++) {
@@ -412,6 +385,7 @@ function findInsertionRow(
       if (colAStr !== '') {
         if (colAStr.toLowerCase() === normalizedTarget) {
           // Anchor row (or repeat) for our supplier
+          if (firstSupplierRow < 0) firstSupplierRow = r;
           lastSupplierRow = r;
           inBlock = true;
         } else if (inBlock) {
@@ -434,7 +408,7 @@ function findInsertionRow(
       console.log(
         `[findInsertionRow] Account "${overrideAccount}" last row: ${lastSupplierRow} → inserting at ${lastSupplierRow + 1}`
       );
-      return { insertAt: lastSupplierRow + 1, supplierFound: true, resolvedAccount: overrideAccount };
+      return { insertAt: lastSupplierRow + 1, supplierFound: true, resolvedAccount: overrideAccount, blockStartRow: firstSupplierRow };
     }
   }
 
@@ -482,7 +456,7 @@ function findInsertionRow(
         `[findInsertionRow] Name fallback "${supplierNameHint}" last row: ${lastSupplierRow} ` +
         `→ inserting at ${lastSupplierRow + 1} (account from sheet: "${sheetAccount ?? 'n/a'}")`
       );
-      return { insertAt: lastSupplierRow + 1, supplierFound: true, resolvedAccount: sheetAccount ?? overrideAccount };
+      return { insertAt: lastSupplierRow + 1, supplierFound: true, resolvedAccount: sheetAccount ?? overrideAccount, blockStartRow: firstSupplierRow };
     }
   }
 
@@ -491,7 +465,7 @@ function findInsertionRow(
   console.log(
     `[findInsertionRow] Supplier "${overrideAccount ?? supplierNameHint ?? '(none)'}" not found → inserting at trueLastRow+2 = ${trueLastRow + 2}`
   );
-  return { insertAt: trueLastRow + 2, supplierFound: false, resolvedAccount: overrideAccount };
+  return { insertAt: trueLastRow + 2, supplierFound: false, resolvedAccount: overrideAccount, blockStartRow: undefined };
 }
 
 // -----------------------------------------------------------------------------
@@ -499,112 +473,151 @@ function findInsertionRow(
 // -----------------------------------------------------------------------------
 
 /**
- * Scan a supplier's row block for an existing certificate that matches the
- * incoming cert. Returns the matching row number, or null if no match.
+ * Aggressively normalise a cert name for alias comparison:
+ * lowercase + strip every non-alphanumeric character.
+ * "BRC Global Standards" → "brcglobalstandards"
+ * "FSC Certificate"      → "fsccertificate"
+ * "GRS Certification"    → "grscertification"
+ */
+function normCert(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+/**
+ * Return true when two aggressively-normalised cert strings refer to the same
+ * certification, using hardcoded alias groups for industry-standard acronyms.
  *
- * Match criteria — a row is considered the SAME cert if EITHER is true:
+ * Both `a` and `b` must already be passed through normCert().
+ */
+function certAliasMatch(a: string, b: string): boolean {
+  if (!a || !b) return false;
+
+  // Containment — handles "brc" ↔ "brcgs", long descriptions containing acronym
+  if (a.includes(b) || b.includes(a)) return true;
+
+  // BRC / BRCGS / BRC Global Standards
+  if (a.includes('brc') && b.includes('brc')) return true;
+
+  // FSC / Forest Stewardship Council
+  if ((a.includes('fsc') || a.includes('foreststewardship')) &&
+      (b.includes('fsc') || b.includes('foreststewardship'))) return true;
+
+  // GRS / Global Recycled Standard
+  if ((a.includes('grs') || a.includes('globalrecycled')) &&
+      (b.includes('grs') || b.includes('globalrecycled'))) return true;
+
+  // ISO — require the number to also match (prevents ISO 9001 ↔ ISO 14001)
+  const isoNumA = a.match(/iso(\d+)/)?.[1];
+  const isoNumB = b.match(/iso(\d+)/)?.[1];
+  if (isoNumA && isoNumB && isoNumA === isoNumB) return true;
+
+  // GOTS / Global Organic Textile Standard
+  if ((a.includes('gots') || a.includes('globalorganic')) &&
+      (b.includes('gots') || b.includes('globalorganic'))) return true;
+
+  // OEKO-TEX / Standard 100
+  if ((a.includes('oekotex') || a.includes('oekotek') || a.includes('standard100')) &&
+      (b.includes('oekotex') || b.includes('oekotek') || b.includes('standard100'))) return true;
+
+  // RSPO / Roundtable on Sustainable Palm Oil
+  if ((a.includes('rspo') || a.includes('sustainablepalm')) &&
+      (b.includes('rspo') || b.includes('sustainablepalm'))) return true;
+
+  // SEDEX
+  if (a.includes('sedex') && b.includes('sedex')) return true;
+
+  // SMETA
+  if (a.includes('smeta') && b.includes('smeta')) return true;
+
+  // Rainforest Alliance
+  if (a.includes('rainforest') && b.includes('rainforest')) return true;
+
+  // Halal
+  if (a.includes('halal') && b.includes('halal')) return true;
+
+  // Kosher
+  if (a.includes('kosher') && b.includes('kosher')) return true;
+
+  return false;
+}
+
+/**
+ * Scan a supplier's pre-identified row block for an existing certificate that
+ * matches the incoming cert. Returns the matching row number, or null.
  *
- *   A. FILENAME match in Comments (col 15).
- *      Tried first with the exact uploaded name, then again with OS copy-markers
- *      stripped ("cert (1).pdf" → "cert.pdf"). Handles both re-uploads and
- *      OS-renamed duplicates without requiring any field values to match.
+ * KEY DESIGN DECISIONS:
+ *   • blockStartRow / lastSupplierRow come from findInsertionRow — no re-scanning
+ *     of Col A or Col B inside this loop. Sub-rows have blank Col A; checking it
+ *     would silently skip them and miss every update-in-place opportunity.
+ *   • cell.text is used (not cell.value.toString()) so RichText cells in the
+ *     Certification column are read correctly instead of returning "[object Object]".
+ *   • Cert names are normalised with normCert() (lowercase + strip punctuation)
+ *     before alias matching, so "BRC", "BRCGS", "BRC Global Standards", etc.
+ *     all reduce to comparable tokens.
  *
- *   B. CERT NAME containment (bidirectional, min 5 chars) AND PRODUCT match.
- *      No measure gate — the client's sheet often stores the cert name with a
- *      long descriptor (e.g. "ISO 9001:2015 (Quality Management System)") while
- *      the AI extracts just "ISO 9001:2015". Requiring measure equality blocked
- *      these obvious matches. The product gate still prevents "OK Compost Cups"
- *      from colliding with "OK Compost Containers".
+ * Match criteria — a row is the SAME cert if EITHER is true:
+ *   A. The uploaded filename appears in Comments (col 15). OS copy-markers
+ *      (" (1).pdf") are stripped for a second attempt.
+ *   B. certAliasMatch() returns true for the Certification column (col 6)
+ *      AND the Product Category (col 7) is compatible (wildcard if either empty).
  *
- * Column numbers are hard-coded (6/7/15) to prevent data-shift bugs.
+ * Column numbers are hard-coded (5/6/7/15) to prevent data-shift bugs.
  */
 function findExistingCertRow(
   ws: ExcelJS.Worksheet,
-  supplierAccountCol: number,
-  headerRowNum: number,
-  lastSupplierRow: number,
-  overrideAccount: string | undefined,
+  blockStartRow: number,     // first row of supplier's block (from findInsertionRow)
+  lastSupplierRow: number,   // last row of supplier's block  (insertAt - 1)
   incomingCert: string,
-  incomingMeasure: string,   // kept for future use / logging
+  incomingMeasure: string,   // reserved for future logging
   incomingFileName: string,
   incomingProduct: string
 ): number | null {
-  if (!overrideAccount || lastSupplierRow < headerRowNum + 1) return null;
+  if (blockStartRow < 0 || lastSupplierRow < blockStartRow) return null;
 
-  const normAccount   = overrideAccount.toLowerCase().trim();
-  const normInCert    = incomingCert.toLowerCase().trim();
-  const normInFile    = incomingFileName.toLowerCase().trim();
-  const normInProduct = incomingProduct.toLowerCase().trim();
-
-  // Strip OS copy-markers before the extension: "cert (1).pdf" → "cert.pdf"
+  const rawInCert    = normCert(incomingCert);
+  const normInFile   = incomingFileName.toLowerCase().trim();
+  // Strip OS copy-markers: "cert (1).pdf" → "cert.pdf"
   const normInFileCleaned = normInFile.replace(/\s*\(\d+\)(\.\w+)$/, '$1');
+  const rawInProduct = normCert(incomingProduct);
 
-  // Find the first row of this supplier's block in col A
-  let blockStart = -1;
-  for (let r = headerRowNum + 1; r <= lastSupplierRow; r++) {
-    const v = ws.getRow(r).getCell(supplierAccountCol).value;
-    if (v !== null && v !== undefined && String(v).toLowerCase().trim() === normAccount) {
-      blockStart = r;
-      break;
-    }
-  }
-  if (blockStart < 0) return null;
-
-  // Scan blockStart → lastSupplierRow (includes blank-A rows from previous inserts)
-  for (let r = blockStart; r <= lastSupplierRow; r++) {
+  for (let r = blockStartRow; r <= lastSupplierRow; r++) {
     const row = ws.getRow(r);
 
-    // Hard-coded column indices: col 6 = Certification, col 7 = Product Category,
-    // col 15 = Comments. (Measure / col 5 is no longer used as a match gate.)
-    const existingCert    = (row.getCell(6).value?.toString()  ?? '').toLowerCase().trim();
-    const existingProduct = (row.getCell(7).value?.toString()  ?? '').toLowerCase().trim();
-    const comments        = (row.getCell(15).value?.toString() ?? '').toLowerCase();
+    // Use cell.text (not value.toString()) — handles RichText cells correctly.
+    // Hard-coded cols: 6 = Certification, 7 = Product Category, 15 = Comments.
+    const existingCertText = row.getCell(6).text ?? '';
+    const rawExistingCert  = normCert(existingCertText);
+    const rawExistingProd  = normCert(row.getCell(7).text ?? '');
+    const comments         = (row.getCell(15).text ?? '').toLowerCase();
+
+    // Skip rows with no certification data at all
+    if (!rawExistingCert) continue;
 
     // --- CRITERION A: Filename in Comments (col 15) ---
-    // Try exact name first; if it was OS-renamed (e.g. " (1)" appended), try
-    // the cleaned version so "cert (1).pdf" still matches "cert.pdf" in comments.
     if (normInFile && comments.includes(normInFile)) {
-      console.log(
-        `[findExistingCertRow] Filename match at row ${r}: "${incomingFileName}" in comments`
-      );
+      console.log(`[findExistingCertRow] Filename match at row ${r}: "${incomingFileName}"`);
       return r;
     }
     if (normInFileCleaned !== normInFile && normInFileCleaned && comments.includes(normInFileCleaned)) {
-      console.log(
-        `[findExistingCertRow] Cleaned-filename match at row ${r}: ` +
-        `"${normInFileCleaned}" (from "${incomingFileName}") in comments`
-      );
+      console.log(`[findExistingCertRow] Cleaned-filename match at row ${r}: "${normInFileCleaned}"`);
       return r;
     }
 
-    // --- CRITERION B: Cert name fuzzy match + Product gate ---
-    // Both the AI name and the sheet name must be at least 3 chars so a
-    // trivially short value never accidentally matches everything.
-    if (normInCert.length >= 3 && existingCert.length >= 3) {
-      // Level 1 — simple containment (catches "BRC" ↔ "BRCGS", "FSC Certificate" ↔ "FSC Certificate")
-      const simpleContainment = existingCert.includes(normInCert) || normInCert.includes(existingCert);
-      // Level 2 — shared meaningful token (catches "GRS Certification" ↔ "Global Recycled Standard (GRS) Version 4.0")
-      const sharedToken = (() => {
-        const tokA = extractCertTokens(existingCert);
-        const tokB = extractCertTokens(normInCert);
-        for (const t of tokA) { if (tokB.has(t)) return true; }
-        return false;
-      })();
-      const isCertMatch = simpleContainment || sharedToken;
+    // --- CRITERION B: Cert alias match + Product gate ---
+    if (rawInCert.length >= 3 && rawExistingCert.length >= 3) {
+      const isCertMatch = certAliasMatch(rawExistingCert, rawInCert);
 
-      // Empty product on either side → wildcard (legacy rows without a product
-      // column still get updated rather than duplicated).
-      const isProductMatch = existingProduct === normInProduct
-        || existingProduct === ''
-        || normInProduct === ''
-        || existingProduct.includes(normInProduct)
-        || normInProduct.includes(existingProduct);
+      // Empty product on either side → wildcard (legacy rows with no product column)
+      const isProductMatch = rawExistingProd === rawInProduct
+        || rawExistingProd === ''
+        || rawInProduct   === ''
+        || rawExistingProd.includes(rawInProduct)
+        || rawInProduct.includes(rawExistingProd);
 
       if (isCertMatch && isProductMatch) {
-        const matchType = simpleContainment ? 'containment' : 'shared-token';
         console.log(
-          `[findExistingCertRow] Cert-name match (${matchType}) at row ${r}: ` +
-          `existing="${existingCert}", incoming="${normInCert}", product="${existingProduct}"`
+          `[findExistingCertRow] Alias match at row ${r}: ` +
+          `existing="${existingCertText}", incoming="${incomingCert}"`
         );
         return r;
       }
@@ -906,6 +919,7 @@ export async function appendToMasterExcel(
   const batchInsertPtr                = new Map<string, number>();
   const batchSupplierWasFound         = new Map<string, boolean>();
   const batchResolvedAccount          = new Map<string, string | undefined>();
+  const batchBlockStartRow            = new Map<string, number | undefined>();
 
   for (const cert of processedCertificates) {
     const overrideAccount: string | undefined = (cert as any)._matchedAccount || undefined;
@@ -919,13 +933,15 @@ export async function appendToMasterExcel(
     let insertAt: number;
     let supplierFound: boolean;
     let resolvedAccount: string | undefined;
+    let blockStartRow: number | undefined;
 
     if (batchInsertPtr.has(supplierKey)) {
       insertAt        = batchInsertPtr.get(supplierKey)!;
       supplierFound   = batchSupplierWasFound.get(supplierKey)!;
       resolvedAccount = batchResolvedAccount.get(supplierKey);
+      blockStartRow   = batchBlockStartRow.get(supplierKey);
     } else {
-      ({ insertAt, supplierFound, resolvedAccount } = findInsertionRow(
+      ({ insertAt, supplierFound, resolvedAccount, blockStartRow } = findInsertionRow(
         ws,
         cols.supplierAccount  ?? 1,
         cols.supplierName     ?? 2,
@@ -936,6 +952,7 @@ export async function appendToMasterExcel(
         cols.productCategory  ?? 7      // sub-row detection
       ));
       batchResolvedAccount.set(supplierKey, resolvedAccount);
+      batchBlockStartRow.set(supplierKey, blockStartRow);
     }
 
     // ── Pre-calculate Status & Days for Protected View ────────────────────────
@@ -959,10 +976,8 @@ export async function appendToMasterExcel(
     if (supplierFound) {
       const matchRow = findExistingCertRow(
         ws,
-        cols.supplierAccount ?? 1,
-        headerRowNum,
+        blockStartRow ?? -1,  // first row of supplier's block (from findInsertionRow)
         insertAt - 1,         // lastSupplierRow = one before next-insert position
-        resolvedAccount ?? overrideAccount,
         cert.certification   || '',
         cert.measure         || '',
         cert.fileName        || '',
