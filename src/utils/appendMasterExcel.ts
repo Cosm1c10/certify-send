@@ -473,129 +473,52 @@ function findInsertionRow(
 // -----------------------------------------------------------------------------
 
 /**
- * Aggressively normalise a cert name for alias comparison:
- * lowercase + strip every non-alphanumeric character.
- * "BRC Global Standards" → "brcglobalstandards"
- * "FSC Certificate"      → "fsccertificate"
- * "GRS Certification"    → "grscertification"
- */
-function normCert(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9]/g, '');
-}
-
-/**
- * Return true when two aggressively-normalised cert strings refer to the same
- * certification, using hardcoded alias groups for industry-standard acronyms.
+ * Scan a supplier's pre-identified row block (startRow → lastSupplierRow) for
+ * an existing certificate that matches the incoming cert.
  *
- * Both `a` and `b` must already be passed through normCert().
- */
-function certAliasMatch(a: string, b: string): boolean {
-  if (!a || !b) return false;
-
-  // Containment — handles "brc" ↔ "brcgs", long descriptions containing acronym
-  if (a.includes(b) || b.includes(a)) return true;
-
-  // BRC / BRCGS / BRC Global Standards
-  if (a.includes('brc') && b.includes('brc')) return true;
-
-  // FSC / Forest Stewardship Council
-  if ((a.includes('fsc') || a.includes('foreststewardship')) &&
-      (b.includes('fsc') || b.includes('foreststewardship'))) return true;
-
-  // GRS / Global Recycled Standard
-  if ((a.includes('grs') || a.includes('globalrecycled')) &&
-      (b.includes('grs') || b.includes('globalrecycled'))) return true;
-
-  // ISO — require the number to also match (prevents ISO 9001 ↔ ISO 14001)
-  const isoNumA = a.match(/iso(\d+)/)?.[1];
-  const isoNumB = b.match(/iso(\d+)/)?.[1];
-  if (isoNumA && isoNumB && isoNumA === isoNumB) return true;
-
-  // GOTS / Global Organic Textile Standard
-  if ((a.includes('gots') || a.includes('globalorganic')) &&
-      (b.includes('gots') || b.includes('globalorganic'))) return true;
-
-  // OEKO-TEX / Standard 100
-  if ((a.includes('oekotex') || a.includes('oekotek') || a.includes('standard100')) &&
-      (b.includes('oekotex') || b.includes('oekotek') || b.includes('standard100'))) return true;
-
-  // RSPO / Roundtable on Sustainable Palm Oil
-  if ((a.includes('rspo') || a.includes('sustainablepalm')) &&
-      (b.includes('rspo') || b.includes('sustainablepalm'))) return true;
-
-  // SEDEX
-  if (a.includes('sedex') && b.includes('sedex')) return true;
-
-  // SMETA
-  if (a.includes('smeta') && b.includes('smeta')) return true;
-
-  // Rainforest Alliance
-  if (a.includes('rainforest') && b.includes('rainforest')) return true;
-
-  // Halal
-  if (a.includes('halal') && b.includes('halal')) return true;
-
-  // Kosher
-  if (a.includes('kosher') && b.includes('kosher')) return true;
-
-  return false;
-}
-
-/**
- * Scan a supplier's pre-identified row block for an existing certificate that
- * matches the incoming cert. Returns the matching row number, or null.
+ * CRITICAL DESIGN RULES:
+ *   • startRow and lastSupplierRow come from findInsertionRow — we NEVER
+ *     re-scan Col A or Col B inside this loop. Sub-rows have a blank Col A;
+ *     checking it would skip them silently and miss every update-in-place.
+ *   • Column indices are taken from the parsed `cols` map (dynamic), not
+ *     hard-coded, so the function works regardless of actual sheet layout.
+ *   • Cert names from both the incoming cert and the sheet are normalised
+ *     aggressively (lowercase + strip all non-alphanumeric chars) before
+ *     comparison so "BRC", "BRCGS", "BRC Global Standards" all collapse to
+ *     comparable strings.
+ *   • The Measure column text is concatenated with the Certification text
+ *     before matching so that "BRCGS" in either column is detected.
  *
- * KEY DESIGN DECISIONS:
- *   • blockStartRow / lastSupplierRow come from findInsertionRow — no re-scanning
- *     of Col A or Col B inside this loop. Sub-rows have blank Col A; checking it
- *     would silently skip them and miss every update-in-place opportunity.
- *   • cell.text is used (not cell.value.toString()) so RichText cells in the
- *     Certification column are read correctly instead of returning "[object Object]".
- *   • Cert names are normalised with normCert() (lowercase + strip punctuation)
- *     before alias matching, so "BRC", "BRCGS", "BRC Global Standards", etc.
- *     all reduce to comparable tokens.
- *
- * Match criteria — a row is the SAME cert if EITHER is true:
- *   A. The uploaded filename appears in Comments (col 15). OS copy-markers
- *      (" (1).pdf") are stripped for a second attempt.
- *   B. certAliasMatch() returns true for the Certification column (col 6)
- *      AND the Product Category (col 7) is compatible (wildcard if either empty).
- *
- * Column numbers are hard-coded (5/6/7/15) to prevent data-shift bugs.
+ * Returns the matching row number, or null if no match.
  */
 function findExistingCertRow(
   ws: ExcelJS.Worksheet,
-  blockStartRow: number,     // first row of supplier's block (from findInsertionRow)
-  lastSupplierRow: number,   // last row of supplier's block  (insertAt - 1)
-  incomingCert: string,
-  incomingMeasure: string,   // reserved for future logging
-  incomingFileName: string,
-  incomingProduct: string
+  startRow: number,        // first row of supplier's block (from findInsertionRow)
+  lastSupplierRow: number, // last row of supplier's block  (= insertAt - 1)
+  cert: CertificateData,
+  cols: Record<string, number>
 ): number | null {
-  if (blockStartRow < 0 || lastSupplierRow < blockStartRow) return null;
+  if (startRow < 0 || lastSupplierRow < startRow) return null;
 
-  const rawInCert    = normCert(incomingCert);
-  const normInFile   = incomingFileName.toLowerCase().trim();
-  // Strip OS copy-markers: "cert (1).pdf" → "cert.pdf"
+  // Aggressive normalisation: lowercase + strip every non-alphanumeric char.
+  const norm = (s: string) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+  const normalizedNew = norm(cert.certification || '');
+  if (!normalizedNew) return null;
+
+  // Filename check prep (Criterion A)
+  const normInFile        = (cert.fileName || '').toLowerCase().trim();
   const normInFileCleaned = normInFile.replace(/\s*\(\d+\)(\.\w+)$/, '$1');
-  const rawInProduct = normCert(incomingProduct);
 
-  for (let r = blockStartRow; r <= lastSupplierRow; r++) {
+  for (let r = startRow; r <= lastSupplierRow; r++) {
     const row = ws.getRow(r);
 
-    // Use cell.text (not value.toString()) — handles RichText cells correctly.
-    // Hard-coded cols: 6 = Certification, 7 = Product Category, 15 = Comments.
-    const existingCertText = row.getCell(6).text ?? '';
-    const rawExistingCert  = normCert(existingCertText);
-    const rawExistingProd  = normCert(row.getCell(7).text ?? '');
-    const comments         = (row.getCell(15).text ?? '').toLowerCase();
-
-    // Skip rows with no certification data at all
-    if (!rawExistingCert) continue;
-
-    // --- CRITERION A: Filename in Comments (col 15) ---
+    // --- CRITERION A: Filename in Comments ---
+    // Checked first — it's the most authoritative signal (same physical file).
+    const commentsVal = row.getCell(cols.comments).value;
+    const comments    = commentsVal ? String(commentsVal).toLowerCase() : '';
     if (normInFile && comments.includes(normInFile)) {
-      console.log(`[findExistingCertRow] Filename match at row ${r}: "${incomingFileName}"`);
+      console.log(`[findExistingCertRow] Filename match at row ${r}: "${cert.fileName}"`);
       return r;
     }
     if (normInFileCleaned !== normInFile && normInFileCleaned && comments.includes(normInFileCleaned)) {
@@ -603,24 +526,99 @@ function findExistingCertRow(
       return r;
     }
 
-    // --- CRITERION B: Cert alias match + Product gate ---
-    if (rawInCert.length >= 3 && rawExistingCert.length >= 3) {
-      const isCertMatch = certAliasMatch(rawExistingCert, rawInCert);
+    // --- CRITERION B: Cert alias match ---
+    // Read Certification (col F) and Measure (col E); combine so that an
+    // acronym appearing in either column is still found.
+    const certCellVal    = row.getCell(cols.certification).value;
+    const measureCellVal = row.getCell(cols.measure).value;
 
-      // Empty product on either side → wildcard (legacy rows with no product column)
-      const isProductMatch = rawExistingProd === rawInProduct
-        || rawExistingProd === ''
-        || rawInProduct   === ''
-        || rawExistingProd.includes(rawInProduct)
-        || rawInProduct.includes(rawExistingProd);
+    const existingCertText    = certCellVal    ? String(certCellVal)    : '';
+    const existingMeasureText = measureCellVal ? String(measureCellVal) : '';
+    const combinedExisting    = norm(existingCertText) + norm(existingMeasureText);
 
-      if (isCertMatch && isProductMatch) {
-        console.log(
-          `[findExistingCertRow] Alias match at row ${r}: ` +
-          `existing="${existingCertText}", incoming="${incomingCert}"`
-        );
-        return r;
-      }
+    if (!combinedExisting) continue;
+
+    let isMatch = false;
+
+    // BRC / BRCGS / BRC Global Standards
+    if (normalizedNew.includes('brc') && combinedExisting.includes('brc')) {
+      isMatch = true;
+    }
+    // FSC / Forest Stewardship Council
+    else if (
+      (normalizedNew.includes('fsc') || normalizedNew.includes('foreststewardship')) &&
+      (combinedExisting.includes('fsc') || combinedExisting.includes('foreststewardship'))
+    ) {
+      isMatch = true;
+    }
+    // GRS / Global Recycled Standard
+    else if (
+      (normalizedNew.includes('grs') || normalizedNew.includes('globalrecycled')) &&
+      (combinedExisting.includes('grs') || combinedExisting.includes('globalrecycled'))
+    ) {
+      isMatch = true;
+    }
+    // ISO — require matching number so ISO 9001 ≠ ISO 14001
+    else if (normalizedNew.includes('iso') && combinedExisting.includes('iso')) {
+      const isoNumNew = normalizedNew.match(/iso(\d+)/)?.[1];
+      const isoNumEx  = combinedExisting.match(/iso(\d+)/)?.[1];
+      if (isoNumNew && isoNumEx && isoNumNew === isoNumEx) isMatch = true;
+    }
+    // GOTS / Global Organic Textile Standard
+    else if (
+      (normalizedNew.includes('gots') || normalizedNew.includes('globalorganic')) &&
+      (combinedExisting.includes('gots') || combinedExisting.includes('globalorganic'))
+    ) {
+      isMatch = true;
+    }
+    // OEKO-TEX / Standard 100
+    else if (
+      (normalizedNew.includes('oekotex') || normalizedNew.includes('oekotek') || normalizedNew.includes('standard100')) &&
+      (combinedExisting.includes('oekotex') || combinedExisting.includes('oekotek') || combinedExisting.includes('standard100'))
+    ) {
+      isMatch = true;
+    }
+    // RSPO / Roundtable on Sustainable Palm Oil
+    else if (
+      (normalizedNew.includes('rspo') || normalizedNew.includes('sustainablepalm')) &&
+      (combinedExisting.includes('rspo') || combinedExisting.includes('sustainablepalm'))
+    ) {
+      isMatch = true;
+    }
+    // SEDEX
+    else if (normalizedNew.includes('sedex') && combinedExisting.includes('sedex')) {
+      isMatch = true;
+    }
+    // SMETA
+    else if (normalizedNew.includes('smeta') && combinedExisting.includes('smeta')) {
+      isMatch = true;
+    }
+    // Rainforest Alliance
+    else if (normalizedNew.includes('rainforest') && combinedExisting.includes('rainforest')) {
+      isMatch = true;
+    }
+    // Halal
+    else if (normalizedNew.includes('halal') && combinedExisting.includes('halal')) {
+      isMatch = true;
+    }
+    // Kosher
+    else if (normalizedNew.includes('kosher') && combinedExisting.includes('kosher')) {
+      isMatch = true;
+    }
+    // Generic fallback: bidirectional containment
+    else if (normalizedNew.length >= 4 && combinedExisting.includes(normalizedNew)) {
+      isMatch = true;
+    }
+    else if (combinedExisting.length >= 4 && normalizedNew.includes(combinedExisting)) {
+      isMatch = true;
+    }
+
+    if (isMatch) {
+      console.log(
+        `[findExistingCertRow] Match at row ${r}: ` +
+        `existing="${existingCertText}", incoming="${cert.certification}"`
+      );
+      return r;
     }
   }
 
@@ -978,10 +976,8 @@ export async function appendToMasterExcel(
         ws,
         blockStartRow ?? -1,  // first row of supplier's block (from findInsertionRow)
         insertAt - 1,         // lastSupplierRow = one before next-insert position
-        cert.certification   || '',
-        cert.measure         || '',
-        cert.fileName        || '',
-        cert.productCategory || ''
+        cert,
+        cols
       );
 
       if (matchRow !== null) {
