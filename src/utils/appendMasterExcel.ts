@@ -1034,6 +1034,20 @@ export async function appendToMasterExcel(
       }
     });
 
+    // PASS 2 fallback — if formula scavenging left H or K empty (no formula row
+    // was found above the insertion point), write the pre-calculated hardcoded
+    // values directly so Status and Days to Expire are never blank.
+    if (calculatedStatus !== '' || calculatedDays !== '') {
+      const hCellNow = newRow.getCell(statusCol ?? 8);
+      const kCellNow = newRow.getCell(kCol ?? 11);
+      if (hCellNow.type !== ExcelJS.ValueType.Formula) {
+        hCellNow.value = calculatedStatus || null;
+      }
+      if (kCellNow.type !== ExcelJS.ValueType.Formula) {
+        kCellNow.value = calculatedDays !== '' ? calculatedDays : null;
+      }
+    }
+
     // PASS 3 — Write data values (H and K keep formula+result from PASS 2)
     const setCell = (colIndex: number | undefined, value: ExcelJS.CellValue | null) => {
       if (colIndex === undefined) return;

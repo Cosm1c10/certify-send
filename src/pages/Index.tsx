@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Download, ShieldCheck, RotateCcw, AlertCircle, FileSearch, Zap, Globe, FileSpreadsheet, ChevronsUpDown, Check, X, UserCheck, Plus } from 'lucide-react';
+import { Download, ShieldCheck, RotateCcw, AlertCircle, FileSearch, Zap, Globe, FileSpreadsheet, ChevronsUpDown, Check, X, UserCheck, Plus, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -53,11 +53,15 @@ const Index = () => {
   const [detectedNewSuppliers, setDetectedNewSuppliers] = useState<NewSupplierInfo[]>([]);
   const [pendingExportType, setPendingExportType] = useState<'excel' | 'feeder' | null>(null);
 
+  // Export loading state — prevents double-clicks and shows progress feedback
+  const [isExporting, setIsExporting] = useState(false);
+
   // Proceed with export after user confirms
   const proceedWithExport = async () => {
     setShowNewSuppliersDialog(false);
 
     if (pendingExportType === 'excel') {
+      setIsExporting(true);
       try {
         if (masterFile.rawBuffer) {
           await appendToMasterExcel(masterFile.rawBuffer, certificates, masterFile.supplierMap);
@@ -68,6 +72,8 @@ const Index = () => {
         console.error('Export failed:', error);
         const msg = error instanceof Error ? error.message : String(error);
         alert(`Failed to export Excel file:\n\n${msg}`);
+      } finally {
+        setIsExporting(false);
       }
     } else if (pendingExportType === 'feeder') {
       try {
@@ -105,6 +111,7 @@ const Index = () => {
     }
 
     // No new suppliers or no master file - proceed directly
+    setIsExporting(true);
     try {
       if (masterFile.rawBuffer) {
         await appendToMasterExcel(masterFile.rawBuffer, certificates, masterFile.supplierMap);
@@ -115,6 +122,8 @@ const Index = () => {
       console.error('Export failed:', error);
       const msg = error instanceof Error ? error.message : String(error);
       alert(`Failed to export Excel file:\n\n${msg}`);
+    } finally {
+      setIsExporting(false);
     }
   };
 
@@ -535,13 +544,18 @@ const Index = () => {
               </Button>
               <Button
                 onClick={handleExport}
-                disabled={certificates.length === 0 || isProcessing}
+                disabled={certificates.length === 0 || isProcessing || isExporting}
                 size="sm"
                 className="gap-1.5 sm:gap-2 bg-yellow-500 hover:bg-yellow-600 text-gray-900 font-semibold shadow-sm text-xs sm:text-sm"
               >
-                <Download className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-                <span className="hidden xs:inline">Export to Excel</span>
-                <span className="xs:hidden">Export</span>
+                {isExporting
+                  ? <Loader2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 animate-spin" />
+                  : <Download className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                }
+                <span className="hidden xs:inline">
+                  {isExporting ? 'Exporting to Master File...' : 'Export to Excel'}
+                </span>
+                <span className="xs:hidden">{isExporting ? 'Exporting...' : 'Export'}</span>
               </Button>
             </div>
           </div>
