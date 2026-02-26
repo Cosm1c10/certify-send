@@ -351,12 +351,21 @@ function findInsertionRow(
   const trueLastRow = findTrueLastRow(ws, supplierAccountCol, supplierNameCol, certCol, headerRowNum + 1);
 
   // Helper: does a row carry visible cert/product data (i.e. is it a real sub-row)?
+  // Must mirror findTrueLastRow's isRealData guard: skip formula/error/merge/null
+  // cells because their cached <v> values look non-empty but represent no real data.
   const isSubRow = (r: number): boolean => {
     const row = ws.getRow(r);
-    const certVal = row.getCell(certCol).value;
-    const prodVal = row.getCell(productCategoryCol).value;
-    return (certVal !== null && certVal !== undefined && String(certVal).trim() !== '') ||
-           (prodVal !== null && prodVal !== undefined && String(prodVal).trim() !== '');
+    const certCell = row.getCell(certCol);
+    const prodCell = row.getCell(productCategoryCol);
+    const skipTypes = new Set([
+      ExcelJS.ValueType.Null,
+      ExcelJS.ValueType.Formula,
+      ExcelJS.ValueType.Error,
+      ExcelJS.ValueType.Merge,
+    ]);
+    const hasData = (cell: ExcelJS.Cell) =>
+      !skipTypes.has(cell.type) && (cell.text ?? '').trim() !== '';
+    return hasData(certCell) || hasData(prodCell);
   };
 
   // ── Primary search: account code in col A ─────────────────────────────────
