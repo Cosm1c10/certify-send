@@ -159,6 +159,15 @@ function safeCopyStyleAndValidation(
 }
 
 function normalizeHeader(value: unknown): string {
+  // ExcelJS represents styled header cells (bold, coloured background, etc.) as
+  // RichText objects: { richText: [{ text: 'Supplier Name', font: {...} }, ...] }
+  // String(richTextObj) = "[object Object]" — extract plain text instead.
+  if (value && typeof value === 'object' && 'richText' in value) {
+    const parts = (value as any).richText;
+    if (Array.isArray(parts)) {
+      return parts.map((p: any) => p.text ?? '').join('').toLowerCase().trim().replace(/\s+/g, ' ');
+    }
+  }
   return String(value ?? '').toLowerCase().trim().replace(/\s+/g, ' ');
 }
 
@@ -742,18 +751,18 @@ export async function appendToMasterExcel(
   // scope (D) is written — ground truth mapping provides accurate ! / + values.
   // status / daysToExpire are mapped so their column numbers are known for PASS 2.
   const cols = {
-    supplierAccount: colIdx(['supplier account', 'account']),
-    supplierName:    colIdx(['supplier name', 'supplier']),
-    country:         colIdx(['country']),
-    scope:           colIdx(['scope'])           ?? 4,  // col D
-    measure:         colIdx(['measure']),
-    certification:   colIdx(['certification', 'certification ']),
-    productCategory: colIdx(['product category', 'product category ']),
-    status:          colIdx(['status'])          ?? 8,  // col H — formula + result only
-    issued:          colIdx(['issued', 'date issued', 'issue date']),
-    dateOfExpiry:    colIdx(['date of expiry', 'expiry date', 'expiry']),
-    daysToExpire:    colIdx(['days to expire', 'days to expiry']) ?? 11, // col K — formula + result only
-    comments:        colIdx(['comments', 'comment']),
+    supplierAccount: colIdx(['supplier account', 'account'])              ?? 1,
+    supplierName:    colIdx(['supplier name', 'supplier'])                ?? 2,
+    country:         colIdx(['country'])                                  ?? 3,
+    scope:           colIdx(['scope'])                                    ?? 4,
+    measure:         colIdx(['measure'])                                  ?? 5,
+    certification:   colIdx(['certification', 'certification '])          ?? 6,
+    productCategory: colIdx(['product category', 'product category '])   ?? 7,
+    status:          colIdx(['status'])                                   ?? 8,
+    issued:          colIdx(['issued', 'date issued', 'issue date'])      ?? 9,
+    dateOfExpiry:    colIdx(['date of expiry', 'expiry date', 'expiry']) ?? 10,
+    daysToExpire:    colIdx(['days to expire', 'days to expiry'])        ?? 11,
+    comments:        colIdx(['comments', 'comment'])                     ?? 15,
   };
 
   // Step 6: For each certificate: update-in-place if a match exists in the
