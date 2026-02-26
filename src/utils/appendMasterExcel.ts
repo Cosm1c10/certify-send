@@ -1014,6 +1014,13 @@ export async function appendToMasterExcel(
     }
     const formulaTemplateRow = ws.getRow(formulaTemplateIdx);
 
+    // Track whether PASS 2 successfully wrote a live formula to H and K.
+    // These flags are set inside the eachCell callback and used by the fallback
+    // below — more reliable than re-querying cell.type after the fact, since
+    // ExcelJS may not update the in-memory type immediately after assignment.
+    let statusFormulaWritten = false;
+    let daysFormulaWritten   = false;
+
     formulaTemplateRow.eachCell({ includeEmpty: true }, (templateCell, colNumber) => {
       if (templateCell.type === ExcelJS.ValueType.Formula && templateCell.formula) {
         // Col 4 (Scope / col D) is plain text written in PASS 3 — never propagate
@@ -1026,26 +1033,24 @@ export async function appendToMasterExcel(
         );
         if (colNumber === kCol) {
           newRow.getCell(colNumber).value = { formula: pinned, result: calculatedDays };
+          daysFormulaWritten = true;
         } else if (colNumber === statusCol) {
           newRow.getCell(colNumber).value = { formula: pinned, result: calculatedStatus };
+          statusFormulaWritten = true;
         } else {
           newRow.getCell(colNumber).value = { formula: pinned };
         }
       }
     });
 
-    // PASS 2 fallback — if formula scavenging left H or K empty (no formula row
-    // was found above the insertion point), write the pre-calculated hardcoded
-    // values directly so Status and Days to Expire are never blank.
-    if (calculatedStatus !== '' || calculatedDays !== '') {
-      const hCellNow = newRow.getCell(statusCol ?? 8);
-      const kCellNow = newRow.getCell(kCol ?? 11);
-      if (hCellNow.type !== ExcelJS.ValueType.Formula) {
-        hCellNow.value = calculatedStatus || null;
-      }
-      if (kCellNow.type !== ExcelJS.ValueType.Formula) {
-        kCellNow.value = calculatedDays !== '' ? calculatedDays : null;
-      }
+    // PASS 2 fallback — only runs when PASS 2 did NOT write a formula to H/K.
+    // Writes the pre-calculated primitive value directly so those cells are
+    // never blank. Mutually exclusive with the formula path above.
+    if (!statusFormulaWritten && calculatedStatus !== '') {
+      newRow.getCell(statusCol ?? 8).value = calculatedStatus;
+    }
+    if (!daysFormulaWritten && calculatedDays !== '') {
+      newRow.getCell(kCol ?? 11).value = calculatedDays;
     }
 
     // PASS 3 — Write data values (H and K keep formula+result from PASS 2)
