@@ -345,22 +345,52 @@ function findInsertionRow(
   certCol: number,
   headerRowNum: number,
   overrideAccount: string | undefined,
-  supplierNameHint?: string   // fallback: search by col B when account search fails
+  supplierNameHint?: string,   // fallback: search by col B when account search fails
+  productCategoryCol: number = 7
 ): { insertAt: number; supplierFound: boolean; resolvedAccount: string | undefined } {
   const trueLastRow = findTrueLastRow(ws, supplierAccountCol, supplierNameCol, certCol, headerRowNum + 1);
 
+  // Helper: does a row carry visible cert/product data (i.e. is it a real sub-row)?
+  const isSubRow = (r: number): boolean => {
+    const row = ws.getRow(r);
+    const certVal = row.getCell(certCol).value;
+    const prodVal = row.getCell(productCategoryCol).value;
+    return (certVal !== null && certVal !== undefined && String(certVal).trim() !== '') ||
+           (prodVal !== null && prodVal !== undefined && String(prodVal).trim() !== '');
+  };
+
   // ── Primary search: account code in col A ─────────────────────────────────
+  // After the anchor row is found, sub-rows (blank col A but data in col F/G)
+  // are consumed as part of the same block. The block ends at the first
+  // separator row (blank col A AND no cert/product data) or a different supplier.
   if (overrideAccount) {
     const normalizedTarget = overrideAccount.toLowerCase().trim();
     let lastSupplierRow = -1;
+    let inBlock = false;
 
     for (let r = headerRowNum + 1; r <= trueLastRow; r++) {
-      const cellVal = ws.getRow(r).getCell(supplierAccountCol).value;
-      if (cellVal !== null && cellVal !== undefined) {
-        if (String(cellVal).toLowerCase().trim() === normalizedTarget) {
+      const colAVal = ws.getRow(r).getCell(supplierAccountCol).value;
+      const colAStr = colAVal !== null && colAVal !== undefined ? String(colAVal).trim() : '';
+
+      if (colAStr !== '') {
+        if (colAStr.toLowerCase() === normalizedTarget) {
+          // Anchor row (or repeat) for our supplier
           lastSupplierRow = r;
+          inBlock = true;
+        } else if (inBlock) {
+          // Different supplier account — block has ended
+          break;
+        }
+        // else: a different supplier before ours — keep scanning
+      } else if (inBlock) {
+        // Col A is blank while inside our block — sub-row or separator
+        if (isSubRow(r)) {
+          lastSupplierRow = r;  // extend block to cover this sub-row
+        } else {
+          break;  // blank separator row — block has ended
         }
       }
+      // else: blank row before we've found our supplier — keep scanning
     }
 
     if (lastSupplierRow >= 0) {
@@ -374,19 +404,37 @@ function findInsertionRow(
   // ── Fallback search: supplier name in col B ────────────────────────────────
   // Runs when overrideAccount is missing (matchedAccount not in supplierMap)
   // OR when the account code in the sheet doesn't match the map's value.
+  // Same block-depth logic: after the anchor row is found, consume sub-rows
+  // (blank col B but data in col F/G) until a separator or new supplier appears.
   if (supplierNameHint) {
     const normalizedName = supplierNameHint.toLowerCase().trim();
     let lastSupplierRow  = -1;
     let firstSupplierRow = -1;
+    let inBlock = false;
 
     for (let r = headerRowNum + 1; r <= trueLastRow; r++) {
-      const nameVal = ws.getRow(r).getCell(supplierNameCol).value;
-      if (nameVal !== null && nameVal !== undefined) {
-        if (String(nameVal).toLowerCase().trim() === normalizedName) {
+      const colBVal = ws.getRow(r).getCell(supplierNameCol).value;
+      const colBStr = colBVal !== null && colBVal !== undefined ? String(colBVal).trim() : '';
+
+      if (colBStr !== '') {
+        if (colBStr.toLowerCase() === normalizedName) {
           if (firstSupplierRow < 0) firstSupplierRow = r;
           lastSupplierRow = r;
+          inBlock = true;
+        } else if (inBlock) {
+          // Different supplier name — block has ended
+          break;
+        }
+        // else: a different supplier before ours — keep scanning
+      } else if (inBlock) {
+        // Col B is blank while inside our block — sub-row or separator
+        if (isSubRow(r)) {
+          lastSupplierRow = r;  // extend block to cover this sub-row
+        } else {
+          break;  // blank separator row — block has ended
         }
       }
+      // else: blank row before we've found our supplier — keep scanning
     }
 
     if (lastSupplierRow >= 0) {
@@ -833,12 +881,13 @@ export async function appendToMasterExcel(
     } else {
       ({ insertAt, supplierFound, resolvedAccount } = findInsertionRow(
         ws,
-        cols.supplierAccount ?? 1,
-        cols.supplierName    ?? 2,
-        cols.certification   ?? 6,
+        cols.supplierAccount  ?? 1,
+        cols.supplierName     ?? 2,
+        cols.certification    ?? 6,
         headerRowNum,
         overrideAccount,
-        cert.supplierName    // name-based fallback
+        cert.supplierName,              // name-based fallback
+        cols.productCategory  ?? 7      // sub-row detection
       ));
       batchResolvedAccount.set(supplierKey, resolvedAccount);
     }
