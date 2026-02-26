@@ -335,10 +335,12 @@ function findInsertionRow(
   supplierNameCol: number,
   certCol: number,
   headerRowNum: number,
-  overrideAccount: string | undefined
-): { insertAt: number; supplierFound: boolean } {
+  overrideAccount: string | undefined,
+  supplierNameHint?: string   // fallback: search by col B when account search fails
+): { insertAt: number; supplierFound: boolean; resolvedAccount: string | undefined } {
   const trueLastRow = findTrueLastRow(ws, supplierAccountCol, supplierNameCol, certCol, headerRowNum + 1);
 
+  // ── Primary search: account code in col A ─────────────────────────────────
   if (overrideAccount) {
     const normalizedTarget = overrideAccount.toLowerCase().trim();
     let lastSupplierRow = -1;
@@ -354,18 +356,48 @@ function findInsertionRow(
 
     if (lastSupplierRow >= 0) {
       console.log(
-        `[findInsertionRow] Supplier "${overrideAccount}" last row: ${lastSupplierRow} → inserting at ${lastSupplierRow + 1}`
+        `[findInsertionRow] Account "${overrideAccount}" last row: ${lastSupplierRow} → inserting at ${lastSupplierRow + 1}`
       );
-      return { insertAt: lastSupplierRow + 1, supplierFound: true };
+      return { insertAt: lastSupplierRow + 1, supplierFound: true, resolvedAccount: overrideAccount };
+    }
+  }
+
+  // ── Fallback search: supplier name in col B ────────────────────────────────
+  // Runs when overrideAccount is missing (matchedAccount not in supplierMap)
+  // OR when the account code in the sheet doesn't match the map's value.
+  if (supplierNameHint) {
+    const normalizedName = supplierNameHint.toLowerCase().trim();
+    let lastSupplierRow  = -1;
+    let firstSupplierRow = -1;
+
+    for (let r = headerRowNum + 1; r <= trueLastRow; r++) {
+      const nameVal = ws.getRow(r).getCell(supplierNameCol).value;
+      if (nameVal !== null && nameVal !== undefined) {
+        if (String(nameVal).toLowerCase().trim() === normalizedName) {
+          if (firstSupplierRow < 0) firstSupplierRow = r;
+          lastSupplierRow = r;
+        }
+      }
+    }
+
+    if (lastSupplierRow >= 0) {
+      // Extract the account code from col A of the first row of this block
+      const accountCell = ws.getRow(firstSupplierRow).getCell(supplierAccountCol).value;
+      const sheetAccount = accountCell ? String(accountCell).trim() || undefined : undefined;
+      console.log(
+        `[findInsertionRow] Name fallback "${supplierNameHint}" last row: ${lastSupplierRow} ` +
+        `→ inserting at ${lastSupplierRow + 1} (account from sheet: "${sheetAccount ?? 'n/a'}")`
+      );
+      return { insertAt: lastSupplierRow + 1, supplierFound: true, resolvedAccount: sheetAccount ?? overrideAccount };
     }
   }
 
   // +2 instead of +1: leaves one blank separator row between the last
   // existing supplier block and the new one, matching the sheet's visual style.
   console.log(
-    `[findInsertionRow] Supplier "${overrideAccount ?? '(none)'}" not found → inserting at trueLastRow+2 = ${trueLastRow + 2}`
+    `[findInsertionRow] Supplier "${overrideAccount ?? supplierNameHint ?? '(none)'}" not found → inserting at trueLastRow+2 = ${trueLastRow + 2}`
   );
-  return { insertAt: trueLastRow + 2, supplierFound: false };
+  return { insertAt: trueLastRow + 2, supplierFound: false, resolvedAccount: overrideAccount };
 }
 
 // -----------------------------------------------------------------------------
@@ -770,6 +802,7 @@ export async function appendToMasterExcel(
   const newBlockStartedFor            = new Set<string>();
   const batchInsertPtr                = new Map<string, number>();
   const batchSupplierWasFound         = new Map<string, boolean>();
+  const batchResolvedAccount          = new Map<string, string | undefined>();
 
   for (const cert of processedCertificates) {
     const overrideAccount: string | undefined = (cert as any)._matchedAccount || undefined;
@@ -782,19 +815,23 @@ export async function appendToMasterExcel(
     // findTrueLastRow and reverse the insertion order.
     let insertAt: number;
     let supplierFound: boolean;
+    let resolvedAccount: string | undefined;
 
     if (batchInsertPtr.has(supplierKey)) {
-      insertAt      = batchInsertPtr.get(supplierKey)!;
-      supplierFound = batchSupplierWasFound.get(supplierKey)!;
+      insertAt        = batchInsertPtr.get(supplierKey)!;
+      supplierFound   = batchSupplierWasFound.get(supplierKey)!;
+      resolvedAccount = batchResolvedAccount.get(supplierKey);
     } else {
-      ({ insertAt, supplierFound } = findInsertionRow(
+      ({ insertAt, supplierFound, resolvedAccount } = findInsertionRow(
         ws,
         cols.supplierAccount ?? 1,
         cols.supplierName    ?? 2,
         cols.certification   ?? 6,
         headerRowNum,
-        overrideAccount
+        overrideAccount,
+        cert.supplierName    // name-based fallback
       ));
+      batchResolvedAccount.set(supplierKey, resolvedAccount);
     }
 
     // ── Pre-calculate Status & Days for Protected View ────────────────────────
@@ -821,7 +858,7 @@ export async function appendToMasterExcel(
         cols.supplierAccount ?? 1,
         headerRowNum,
         insertAt - 1,         // lastSupplierRow = one before next-insert position
-        overrideAccount,
+        resolvedAccount ?? overrideAccount,
         cert.certification   || '',
         cert.measure         || '',
         cert.fileName        || '',
