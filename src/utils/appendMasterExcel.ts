@@ -136,6 +136,34 @@ function shiftFormulaRow(formula: string, shift: number): string {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Cert-name fuzzy matching helpers
+// ---------------------------------------------------------------------------
+// Words that are too generic to count as a meaningful shared token between
+// two certificate names (e.g. both "ISO 9001 Certificate" and "BRC Certificate"
+// contain "certificate" — that doesn't make them the same cert).
+const CERT_STOP_WORDS = new Set([
+  'a', 'an', 'and', 'by', 'for', 'in', 'no', 'not', 'of', 'or', 'the', 'to', 'v',
+  'cert', 'certificate', 'certification', 'certified',
+  'standard', 'standards',
+  'audit', 'scheme', 'system', 'programme', 'program',
+  'quality', 'management',
+]);
+
+/**
+ * Tokenise a (already-lowercased) cert name into meaningful words (≥3 chars,
+ * not a stop word). Splits on whitespace, brackets, slashes, dots, colons, etc.
+ * Returns a Set so intersection is O(n).
+ */
+function extractCertTokens(s: string): Set<string> {
+  const tokens = new Set<string>();
+  for (const word of s.split(/[\s()\[\]\-,/.:;"']+/)) {
+    const w = word.trim();
+    if (w.length >= 3 && !CERT_STOP_WORDS.has(w)) tokens.add(w);
+  }
+  return tokens;
+}
+
 /**
  * Deep-clone cell style + data validation without copying ExcelJS internal
  * proxy IDs. `{...cell.style}` copies proxy references and corrupts XML.
@@ -549,12 +577,20 @@ function findExistingCertRow(
       return r;
     }
 
-    // --- CRITERION B: Cert name containment + Product gate ---
-    // Both the AI name and the sheet name must be at least 5 chars so a
-    // short token ("ISO") never accidentally matches everything.
-    if (normInCert.length >= 5 && existingCert.length >= 5) {
-      const isCertMatch = existingCert.includes(normInCert)
-        || normInCert.includes(existingCert);
+    // --- CRITERION B: Cert name fuzzy match + Product gate ---
+    // Both the AI name and the sheet name must be at least 3 chars so a
+    // trivially short value never accidentally matches everything.
+    if (normInCert.length >= 3 && existingCert.length >= 3) {
+      // Level 1 — simple containment (catches "BRC" ↔ "BRCGS", "FSC Certificate" ↔ "FSC Certificate")
+      const simpleContainment = existingCert.includes(normInCert) || normInCert.includes(existingCert);
+      // Level 2 — shared meaningful token (catches "GRS Certification" ↔ "Global Recycled Standard (GRS) Version 4.0")
+      const sharedToken = (() => {
+        const tokA = extractCertTokens(existingCert);
+        const tokB = extractCertTokens(normInCert);
+        for (const t of tokA) { if (tokB.has(t)) return true; }
+        return false;
+      })();
+      const isCertMatch = simpleContainment || sharedToken;
 
       // Empty product on either side → wildcard (legacy rows without a product
       // column still get updated rather than duplicated).
@@ -565,8 +601,9 @@ function findExistingCertRow(
         || normInProduct.includes(existingProduct);
 
       if (isCertMatch && isProductMatch) {
+        const matchType = simpleContainment ? 'containment' : 'shared-token';
         console.log(
-          `[findExistingCertRow] Cert-name match at row ${r}: ` +
+          `[findExistingCertRow] Cert-name match (${matchType}) at row ${r}: ` +
           `existing="${existingCert}", incoming="${normInCert}", product="${existingProduct}"`
         );
         return r;

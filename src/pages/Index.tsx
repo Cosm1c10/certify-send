@@ -62,6 +62,8 @@ const Index = () => {
 
     if (pendingExportType === 'excel') {
       setIsExporting(true);
+      // Yield to let React paint the loading overlay before the heavy computation blocks the thread
+      await new Promise(resolve => setTimeout(resolve, 60));
       try {
         if (masterFile.rawBuffer) {
           await appendToMasterExcel(masterFile.rawBuffer, certificates, masterFile.supplierMap);
@@ -112,6 +114,8 @@ const Index = () => {
 
     // No new suppliers or no master file - proceed directly
     setIsExporting(true);
+    // Yield to let React paint the loading overlay before the heavy computation blocks the thread
+    await new Promise(resolve => setTimeout(resolve, 60));
     try {
       if (masterFile.rawBuffer) {
         await appendToMasterExcel(masterFile.rawBuffer, certificates, masterFile.supplierMap);
@@ -594,6 +598,24 @@ const Index = () => {
           </div>
         </div>
       </footer>
+
+      {/* Export Loading Overlay */}
+      {isExporting && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center">
+          <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-xs w-full mx-4 flex flex-col items-center gap-5">
+            <div className="w-16 h-16 rounded-full bg-yellow-50 border-2 border-yellow-200 flex items-center justify-center">
+              <Loader2 className="w-8 h-8 text-yellow-500 animate-spin" />
+            </div>
+            <div className="text-center">
+              <h3 className="font-semibold text-gray-900 text-base mb-1">Updating Master File</h3>
+              <p className="text-sm text-gray-500 leading-relaxed">
+                Processing certificates and writing Excel data&hellip;
+              </p>
+              <p className="text-xs text-gray-400 mt-3">This may take 10–20 seconds. Please wait.</p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* New Suppliers Warning Dialog */}
       <NewSuppliersDialog
